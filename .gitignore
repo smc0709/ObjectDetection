@@ -1,0 +1,17 @@
+###  Executable  ###
+objectdetection
+
+###  CMake ignores  ###
+CMakeCache.txt
+CMakeFiles
+CMakeScripts
+#Testing
+Makefile
+cmake_install.cmake
+#install_manifest.txt
+#compile_commands.json
+#CTestTestfile.cmake
+
+###  I/O  ###
+input/
+output/
