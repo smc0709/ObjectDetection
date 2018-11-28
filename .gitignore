@@ -13,5 +13,5 @@ cmake_install.cmake
 #CTestTestfile.cmake
 
 ###  I/O  ###
-input/
-output/
+input*/
+output*/

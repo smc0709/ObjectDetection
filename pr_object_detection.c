@@ -21,8 +21,8 @@
 #define BUFF_SIZE_OBJECT_DETECTION 2
 #define MAX_NUM_RECTANGLES 20
 
-#define MIN_PR_DIFF_TO_CONSIDER_CUMULUS 0.25
-#define THRESHOLD_KEEP_RECTANGLE_EDGE 0.25
+#define MIN_PR_DIFF_TO_CONSIDER_CUMULUS 0.25    //0.25
+#define THRESHOLD_KEEP_RECTANGLE_EDGE 0.25      //0.3
 
 #define TOP_EDGE 1
 #define LEFT_EDGE 2
@@ -32,10 +32,16 @@
 #define POSSIBLE_CUMULUS 1
 #define NOT_A_CUMULUS 0
 
-#define MAX_CUMULUS_SIZE 5
+#define MAX_CUMULUS_SIZE 10
 
 #define MODE_BASE_IMAGE_FIRST_FRAME 1
 #define MODE_BASE_IMAGE_INMEDIATE_PREVIOUS_FRAME 2
+
+#define MAX_MOV_VALID_FRAME_MODE_FIRST_FRAME 0.065
+#define MAX_MOV_VALID_FRAME_MODE_PREV_FRAME 0.035        //0.065 dentro          0.09 fuera
+#define MOV_INCR_PER_FRAME 0.01
+#define VALID_FRAME 1
+#define INVALID_FRAME 0
 
 #define MIN(a,b) ((a) < (b) ? (a) : (b))
 #define MAX(a,b) ((a) > (b) ? (a) : (b))
@@ -43,8 +49,6 @@
 
 
 ///  GLOBAL VARIABLES  ///
-//int width, height, rgb_channels, linesize;
-
 
 //  x1, y1
 //  +------------------+
@@ -66,10 +70,6 @@ typedef struct {
     int cumulus_size;
 }Cumulus;
 
-typedef struct{
-    int x;
-    int y;
-} Point;
 
 Rectangle *rectangles;
 int rect_index;
@@ -108,16 +108,6 @@ int draw_rectangles_in_frame();
 
 
 ///  FUNCTION IMPLEMENTATIONS  ///
-
-// init_pr_computation taken from perceptual_relevance_api.h (note that BUFF_SIZE is not tunable with the api!!)
-
-// close_pr_computation taken from perceptual_relevance_api.h (note that BUFF_SIZE is not tunable with the api!!) NO ESTA!!
-
-// lhe_advanced_compute_pr_lum  ES INTERNO (por eso es static) y NO HACE FALTA
-
-// lhe_advanced_compute_perceptual_relevance taken from perceptual_relevance_api.h
-
-
 
 // SUBSTITUTE with an adapted pr_to_movement to have position buffer tunable or a method to use the differences with the frame 0
 void pr_changes(int image_position_buffer) {
@@ -208,32 +198,6 @@ void pr_changes(int image_position_buffer) {
     }
 }
 
-
-// get_block_movement taken from perceptual_relevance_api.h NO ESTA!! es interno y no hace falta? creo que es más conveniente otro nombre
-// como get_block_accum_pr_lum_diff o get_block_pr_difference o algo así, no necesariamente significa movimiento
-
-// paint_block taken from perceptual_relevance_api.h NO ESTA!!
-
-
-// CAMBIAR nombre a create_frame ya que el create_frame de pr_movement.c no estará importado, o añadir alguna opcion para que no se muestre la barra
-// en  create_frame y use las diferencias con respecto a la anterior o la de referencia guardada
-/*void create_frame2() {
-    float movement_block = 0;
-    float movement = 0;
-    int luminance;
-    for (int block_y=0; block_y<total_blocks_height; block_y++)      
-    {
-        for (int block_x=0; block_x<total_blocks_width; block_x++) 
-        {
-            movement_block = get_block_pr_difference(block_x, block_y);
-            luminance = (int)(movement_block*255);
-            if (luminance > 255) luminance = 255;
-            if (luminance < 0) luminance = 0;
-            paint_block(block_x, block_y, luminance);
-        }
-    }
-}*/
-
 /**
  * Allocates resorces for storing the rectangles.
  */
@@ -263,10 +227,8 @@ void rectangles_free() {
  *      The sum of the pr differences (with the reference image) of all the blocks in the cumulus.
  */
 float sum_pr_diffs(int x_center, int y_center, int cumulus_size) {
-printf("sum_pr_diffs\n");
-printf("x_center = %d\n y_center = %d\ncumulus_size = %d\n", x_center, y_center, cumulus_size);
+    //printf("x_center = %d\n y_center = %d\ncumulus_size = %d\n", x_center, y_center, cumulus_size);
     if ((x_center<0 || y_center<0 || x_center>total_blocks_width || y_center>total_blocks_height)) {
-        printf("if ((x_center<0 || y_center<0 || x_center>total_blocks_width || y_center>total_blocks_height))\n");
         return 0.0;
     }
 
@@ -277,13 +239,13 @@ printf("x_center = %d\n y_center = %d\ncumulus_size = %d\n", x_center, y_center,
     i = cumulus_size;
     a = (i-(1+((i-1)%2)))/2;
     b = (i-(i%2))/2;
-    printf("a = %d \t b = %d\n", a, b);
+    //printf("a = %d \t b = %d\n", a, b);
 
     x_min = x_center - a;
     y_min = y_center - a;
     x_max = x_center + b;
     y_max = y_center + b;
-    printf("x_min = %d\ty_min = %d\tx_max = %d\ty_max = %d\n", x_min, y_min, x_max, y_max);
+    //printf("x_min = %d\ty_min = %d\tx_max = %d\ty_max = %d\n", x_min, y_min, x_max, y_max);
 
     //x_min = x_center - cumulus_size/2;
     //y_min = y_center - cumulus_size/2;
@@ -315,7 +277,7 @@ int save_rectangle(Rectangle rect) {
     (rectangles[0]).y1 = rect.y1;
     (rectangles[0]).x2 = rect.x2;
     (rectangles[0]).y2 = rect.y2;
-    printf("Rectangulo guardado:\nx1=%d\ny1=%d\nx2=%d\ny2=%d\n", (rectangles[0]).x1, (rectangles[0]).y1, (rectangles[0]).x2, (rectangles[0]).y2);
+    printf("Rectangulo guardado:\tx1=%d\ty1=%d\tx2=%d\ty2=%d\n", (rectangles[0]).x1, (rectangles[0]).y1, (rectangles[0]).x2, (rectangles[0]).y2);
 }
 
 /**
@@ -344,7 +306,7 @@ float* cumulus_pr_neighbours(int block_x, int block_y, int cumulus_size) {
 }
 
 /**
- * Checks if a point and its closest environment is relevant enough to be a cumulus.
+ * Checks if a block and its closest environment is relevant enough to be a cumulus.
  *
  * @param int block_x
  *      The x coordinate of the block that is asked to be considered cumulus.    
@@ -357,17 +319,13 @@ float* cumulus_pr_neighbours(int block_x, int block_y, int cumulus_size) {
 int is_cumulus_seed(int block_x, int block_y) {
     float *pr_values;
     int is_cumulus = NOT_A_CUMULUS;
-    printf("dentro\n");
 
     if (sum_pr_diffs(block_x, block_y, 1) >= MIN_PR_DIFF_TO_CONSIDER_CUMULUS) {
-        printf("if0\n");
         pr_values = cumulus_pr_neighbours(block_x, block_y, 1);
 
-        printf("if1, pr_values computado\n");
         if (!(pr_values[0]==0.0 && pr_values[1]==0.0 && pr_values[2]==0.0 && \
               pr_values[3]==0.0 &&                      pr_values[5]==0.0 && \
               pr_values[6]==0.0 && pr_values[7]==0.0 && pr_values[8]==0.0)) {
-            printf("if2\n");
             is_cumulus = POSSIBLE_CUMULUS;
         }
     }
@@ -375,15 +333,15 @@ int is_cumulus_seed(int block_x, int block_y) {
 }
 
 /**
- * Finds the point that best fits as center of a cumulus.
+ * Given a block inside a cumulus, finds the Cumulus with the best-fit block as center.
  *
  * @param int block_x
  *      The x coordinate of the starting center.    
  * @param int block_y
  *      The y coordinate of the starting center.
  *
- * @return Point
- *      The point containing the coordinates of the selected center..
+ * @return Cumulus
+ *      The cumulus with the selected center and size.
  */
 Cumulus get_cumulus_centered(int block_x, int block_y) {
     int cumulus_size, index_new_center;
@@ -400,23 +358,23 @@ Cumulus get_cumulus_centered(int block_x, int block_y) {
                 if (pr_values[index_new_center] < pr_values[i]) {
                     index_new_center = i;
                 }
-                printf("pr_values[%d] = %f\n", i, pr_values[i]);
+                //printf("pr_values[%d] = %f\n", i, pr_values[i]);
             }
             // Update center coordinates
             if (index_new_center != 4) {
                 cumulus.x_center += (index_new_center%3)-1;     //x_center += j
                 cumulus.y_center += (index_new_center/3)-1;     //y_center += i
                 
-                printf("index_new_center=%d\n", index_new_center);
-                printf("cumulus.x_center=%d\ncumulus.y_center=%d\n", cumulus.x_center, cumulus.y_center);
-                printf("in cumulus.cumulus_size = %d\n", cumulus.cumulus_size);
+                //printf("index_new_center=%d\n", index_new_center);
+                //printf("cumulus.x_center=%d\ncumulus.y_center=%d\n", cumulus.x_center, cumulus.y_center);
+                //printf("in cumulus.cumulus_size = %d\n", cumulus.cumulus_size);
             }
             free(pr_values);
         } while (index_new_center!=4);
         cumulus.cumulus_size = cumulus_size;
     }
     
-    printf("out cumulus.cumulus_size = %d\n", cumulus.cumulus_size);
+    //printf("out cumulus.cumulus_size = %d\n", cumulus.cumulus_size);
 
     return cumulus;
 }
@@ -431,21 +389,20 @@ Cumulus get_cumulus_centered(int block_x, int block_y) {
  *      The rectangle that encloses the cumulus.
  */
 Rectangle cumulus_to_rectangle(Cumulus cumulus){
-    printf("cumulus to rectangle\n");
-    printf("x_center = %d\n y_center = %d\ncumulus_size = %d\n", cumulus.x_center, cumulus.y_center, cumulus.cumulus_size);
+    //printf("x_center = %d\n y_center = %d\ncumulus_size = %d\n", cumulus.x_center, cumulus.y_center, cumulus.cumulus_size);
     Rectangle rect;
     int a, b, i;
 
     i = cumulus.cumulus_size;
     a = (i-(1+((i-1)%2)))/2;
     b = (i-(i%2))/2;
-    printf("a = %d \t b = %d\n", a, b);
+    //printf("a = %d \t b = %d\n", a, b);
 
     rect.x1 = cumulus.x_center - a;
     rect.y1 = cumulus.y_center - a;
     rect.x2 = cumulus.x_center + b;
     rect.y2 = cumulus.y_center + b;
-    printf("rect.x1 = %d\trect.y1 = %d\trect.x2 = %d\trect.y2 = %d\n", rect.x1, rect.y1, rect.x2, rect.y2);
+    //printf("rect.x1 = %d\trect.y1 = %d\trect.x2 = %d\trect.y2 = %d\n", rect.x1, rect.y1, rect.x2, rect.y2);
 
     //rect.x1 = cumulus.x_center - (cumulus.cumulus_size-(cumulus.cumulus_size%2)/2);
     //rect.y1 = cumulus.y_center - (cumulus.cumulus_size-(cumulus.cumulus_size%2)/2);
@@ -587,21 +544,16 @@ Rectangle reduce_rectangle_size(Rectangle rect) {
  */
 int find_objects() {
     Rectangle rect;
-    //Point point_center;
     Cumulus cumulus;
-    printf("finding...\n");
+    //printf("finding...\n");
     for (int block_y=0; block_y<total_blocks_height; block_y++) {
         for (int block_x=0; block_x<total_blocks_width; block_x++) {
-            printf("block_x=%d - - - block_y=%d\n", block_x, block_y);
+            //printf("block_x=%d - - - block_y=%d\n", block_x, block_y);
 
             if (is_cumulus_seed(block_x, block_y)){
-                printf("cumulus seed found. block_x = %d \tblock_y = %d\n", block_x, block_y);
+                //printf("cumulus seed found. block_x = %d \tblock_y = %d\n", block_x, block_y);
                 cumulus = get_cumulus_centered(block_x, block_y);
                 rect = cumulus_to_rectangle(cumulus);
-                //rect.y1 = point_center.y - 2;
-                //rect.y2 = point_center.y + 2;
-                //rect.x1 = point_center.x - 2;
-                //rect.x2 = point_center.x + 2;
                 rect = reduce_rectangle_size(rect);
 
                 save_rectangle(rect);
@@ -721,6 +673,75 @@ int draw_rectangles_in_frame() {
     }
 }
 
+/**
+ * Updates the frame used as reference to the current frame.
+ *
+ * @param int position
+ *      The current buff position.
+ */
+void update_reference_frame(int position){
+    //pr_x_buff[0] = pr_x_buff[position];
+    //pr_y_buff[0] = pr_y_buff[position];
+    for (int block_y=0; block_y<total_blocks_height+1; block_y++) {
+        for (int block_x=0; block_x<total_blocks_width+1; block_x++) {
+            pr_x_buff[0][block_y][block_x] = pr_x_buff[position][block_y][block_x];
+            pr_y_buff[0][block_y][block_x] = pr_y_buff[position][block_y][block_x];
+        }
+    }
+}
+
+
+/**
+ * Verifies if a frame is valid or not.
+ *
+ * @param int block_x
+ *      The x coordinate of the block in which the rectangle edge should be drawn.    
+ * @param int block_y
+ *      The y coordinate of the block in which the rectangle edge should be drawn.
+ * @param int whichEdge
+ *      Indicates which of the edges should be drawn in the block (top, bottom, left or right). Implemented with preprocesor definitions.
+ *
+ * @return int
+ *      If frame is valid returns VALID_FRAME (1), else returns INVALID_FRAME (0).
+ */
+int is_frame_valid (int position){
+    int is_valid = INVALID_FRAME;
+    static int in_a_row_invalid_frames = 0; //first time is 0, then saves value between calls
+    static float last_movement = 0.0; //first time is 0.0, then saves value between calls
+    float movement = get_image_movement(0);
+
+    switch (mode){
+        case MODE_BASE_IMAGE_INMEDIATE_PREVIOUS_FRAME:
+            if (movement < last_movement+MOV_INCR_PER_FRAME || movement <= MAX_MOV_VALID_FRAME_MODE_PREV_FRAME) {
+                is_valid = VALID_FRAME;
+                last_movement = movement;
+                printf("MOVEMENT = %f\n", movement);
+            }else{
+                printf("! ! ! --> INVALID FRAME, MOVEMENT = %f\n", movement);
+            }
+            break;
+
+        case MODE_BASE_IMAGE_FIRST_FRAME:
+            if (movement <= MAX_MOV_VALID_FRAME_MODE_FIRST_FRAME) {
+                is_valid = VALID_FRAME;
+                in_a_row_invalid_frames = 0;
+                printf("MOVEMENT = %f\n", movement);
+            } else {
+                printf("! ! ! --> INVALID FRAME, MOVEMENT = %f\n", movement);
+                in_a_row_invalid_frames++;
+                if (in_a_row_invalid_frames >= 2) {
+                    update_reference_frame(position);
+                }
+            }
+            break;
+
+        default: 
+            printf("ERROR\n");
+            return INVALID_FRAME;
+    }
+
+    return is_valid;
+}
 
 
 ///  MAIN  ///
@@ -769,19 +790,25 @@ int main( int argc, char** argv ) {
         width = bitmapInfoHeader.biWidth;
         height = bitmapInfoHeader.biHeight;
         rgb_channels = bitmapInfoHeader.biBitCount/8;
-
+        
+        //printf("a width = %d, height = %d, rgb_channels = %d\n", width, height, rgb_channels);
         if (initiated == 0) {
+            //printf("b1\n");
             init_pr_computation(width, height, rgb_channels);
+            //printf("b2\n");
             rectangles_malloc();
+            //printf("b3\n");
             initiated = 1;
+            //printf("b4\n");
         }
-
+        
+        //printf("bn\n");
         rgb = load_frame(image, width, height, rgb_channels);
 
         const size_t y_stride = width + (16-width%16)%16;
         const size_t uv_stride = y_stride;
         const size_t rgb_stride = width*3 +(16-(3*width)%16)%16;
-        
+        //printf("c\n");
         rgb24_yuv420_std(width, height, rgb, rgb_stride, y, u, v, y_stride, uv_stride, YCBCR_601);
         
         int position; //int position = MIN(frameNumber, 1); //int position = (frameNumber-1)%BUFF_SIZE_OBJECT_DETECTION;
@@ -793,13 +820,12 @@ int main( int argc, char** argv ) {
         lhe_advanced_compute_perceptual_relevance (y, pr_x_buff[position], pr_y_buff[position]);
 
         pr_changes(position);// cambiar por diferencia de pr con la primera imagen
-        //float movement = get_image_movement(0);
-        //printf("MOVEMENT: %f frame: %d\n", movement, frameNumber);
-
+        
         create_frame(0);
 
-        if (frameNumber > 1 || (frameNumber==1 && mode==MODE_BASE_IMAGE_FIRST_FRAME)) {
-            find_objects();
+        if (frameNumber > starting_frame) {
+            if (is_frame_valid(position))//MODE_BASE_IMAGE_FIRST_FRAME || (is_frame_valid() && MODE_BASE_IMAGE_INMEDIATE_PREVIOUS_FRAME))
+                find_objects();
             draw_rectangles_in_frame();
         }
 
@@ -810,9 +836,7 @@ int main( int argc, char** argv ) {
         stbi_write_bmp(frameName, width, height, rgb_channels, rec_rgb);
 
     }
-    printf("fin1\n");
     close_pr_computation();
-    printf("fin2\n");
     rectangles_free();
 
     return 0;
