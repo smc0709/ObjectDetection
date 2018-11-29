@@ -17,7 +17,6 @@
 
 
 ///  PREPROCESSOR MACROS  ///
-#define I_AM_DEBUGGING 0
 #define BUFF_SIZE_OBJECT_DETECTION 2
 #define MAX_NUM_RECTANGLES 20
 
@@ -38,7 +37,7 @@
 #define MODE_BASE_IMAGE_INMEDIATE_PREVIOUS_FRAME 2
 
 #define MAX_MOV_VALID_FRAME_MODE_FIRST_FRAME 0.065
-#define MAX_MOV_VALID_FRAME_MODE_PREV_FRAME 0.035        //0.065 dentro          0.09 fuera
+#define MAX_MOV_VALID_FRAME_MODE_PREV_FRAME 0.035
 #define MOV_INCR_PER_FRAME 0.01
 #define VALID_FRAME 1
 #define INVALID_FRAME 0
@@ -50,13 +49,15 @@
 
 ///  GLOBAL VARIABLES  ///
 
-//  x1, y1
-//  +------------------+
-//  |                  |
-//  |                  |
-//  |                  |
-//  +------------------+ x2, y2
-//
+/**
+ * Rectangle: to represent the object locations (2 ints define left upper corner and 2 other ints, the right lower corner)
+ *  x1, y1
+ *  +------------------+
+ *  |                  |
+ *  |                  |
+ *  |                  |
+ *  +------------------+ x2, y2
+ */
 typedef struct {
     int x1;
     int y1;
@@ -64,27 +65,49 @@ typedef struct {
     int y2;
 } Rectangle;
 
+/**
+ * Cumulus: to represent the zones where there are many blocks with "reatively high" pr difference respect to the ref frame
+ *   +---------------+  -+           -+
+ *   |               |   |            |
+ *   |               |   |- size      |
+ *   |     (x, y)    |   |            |
+ *   |       +       |  _|            |- 2*size - 1
+ *   |               |                |
+ *   |               |                |
+ *   |               |                |
+ *   +---------------+               -+
+ */
 typedef struct {
     int x_center;
     int y_center;
     int cumulus_size;
-}Cumulus;
+} Cumulus;
 
+// rectangles array
+//Rectangle *rectangles;
+int num_rects;
 
-Rectangle *rectangles;
-int rect_index;
+// The mode used to detect objects (reference frame is always the first o the inmediately previous to the current)
 int mode;
+
+// Simple linked list (with head and tail pointers) for saving the rectangles
+typedef struct linkedrectangle{
+    Rectangle data;
+    struct linkedrectangle *next;
+} LinkedRectangle;
+LinkedRectangle *rect_list_head;
+LinkedRectangle *rect_list_tail;
 
 
 
 ///  FUNCTION PROTOTYPES  ///
-void rectangles_malloc();
+//void rectangles_malloc();
 void rectangles_free();
 int save_rectangle(Rectangle rect);
-
+LinkedRectangle* rectangle_list_add(Rectangle *rect);
+int rectangle_list_remove(LinkedRectangle **lr);
 
 void pr_changes(int image_position_buffer);
-
 
 int find_objects();
 
@@ -100,16 +123,18 @@ int drop_lower_rows(Rectangle rect);
 int drop_left_columns(Rectangle rect);
 int drop_right_columns(Rectangle rect);
 
-
 void create_frame2();
 int drawEdgeOfRectangle(int block_x, int block_y, int whichEdge);
-int draw_rectangles_in_frame();
+void draw_rectangles_in_frame();
+
+void update_reference_frame(int position);
+int is_frame_valid (int position);
 
 
 
 ///  FUNCTION IMPLEMENTATIONS  ///
 
-// SUBSTITUTE with an adapted pr_to_movement to have position buffer tunable or a method to use the differences with the frame 0
+// SUBSTITUTE with an adapted pr_to_movement to have position buffer tunable to use the differences with the frame 0
 void pr_changes(int image_position_buffer) {
     /*int ref_image_position_buffer;
     
@@ -201,16 +226,114 @@ void pr_changes(int image_position_buffer) {
 /**
  * Allocates resorces for storing the rectangles.
  */
-void rectangles_malloc() {
+/*void rectangles_malloc() {
     rectangles = malloc(MAX_NUM_RECTANGLES * sizeof(Rectangle));
-}
+}*/
 
 /**
  * Frees the resorces allocated for storing the rectangles.
  */
 void rectangles_free() {
-    free(rectangles);
+    if (rect_list_head==NULL && rect_list_tail==NULL && num_rects==0) return; // all null (list empty)
+    else while (rect_list_head!=NULL) rectangle_list_remove(&rect_list_head);
+    if (!(rect_list_head==NULL && rect_list_tail==NULL && num_rects==0)) printf("ERROR freeing rectangles list.\n");
 }
+
+/**
+ * Adds a specified rectangle to the end of the linked list. Updates num_rects(+=1), *rect_list_head and *rect_list_tail and
+ * allocates memory space for the node.
+ *
+ * @param Rectangle *rect
+ *      The rectangle to remove from the list.
+ * 
+ * @return LinkedRectangle*
+ *      The rectangle node created.
+ */
+LinkedRectangle* rectangle_list_add(Rectangle *rect) {
+    if (num_rects>=MAX_NUM_RECTANGLES) return NULL;                            // list is full
+
+    LinkedRectangle *lr = (LinkedRectangle *)malloc(sizeof(LinkedRectangle));
+    if (lr==NULL) return NULL;                                                  // no memory
+
+    if (rect_list_head==NULL && rect_list_tail==NULL && num_rects==0)           // all null (list empty)
+        rect_list_head = lr; // the new rectangle is the first element of the list
+    else if (rect_list_head==NULL || rect_list_tail==NULL || num_rects==0)      // one null but the other(s) not
+        return NULL;    // nonsense, both first and last must be null or not
+    else                                                                        // all not null (typical non-empty list)
+        rect_list_tail->next = lr;
+
+    rect_list_tail = lr; // the new rectangle is the last element of the list
+    lr->data = *rect;
+    lr->next = NULL;
+    num_rects++;
+    printf("Rectangulo guardado:\tx1=%d\ty1=%d\tx2=%d\ty2=%d\n", (lr->data).x1, (lr->data).y1, (lr->data).x2, (lr->data).y2);
+    return lr;
+}
+
+/**
+ * Removes a specified rectangle from the linked list.  Updates num_rects(-=1), *rect_list_head and *rect_list_tail and
+ * frees memory space of the node.
+ *
+ * @param LinkedRectangle **lr
+ *      The rectangle to remove from the list.
+ * 
+ * @return int
+ *      Returns 0 if node was removed correctly, 1 in other cases (null reference, empty list, ect.)
+ */
+int rectangle_list_remove(LinkedRectangle **lr) {
+    if (*lr == NULL) return 1;                           // bad parameter
+    if (rect_list_head==NULL || rect_list_tail==NULL || num_rects==0) return 1;      // any null (list empty or corrupt)
+    
+    if (*lr==rect_list_head) {
+        if (*lr==rect_list_tail) {                      // is head and tail
+            rect_list_tail = NULL;
+            rect_list_head = NULL;
+        }else{                                          // is only head
+            rect_list_head = rect_list_head->next;
+        }
+        free(*lr);
+        num_rects--;
+        return 0;
+    }
+
+    LinkedRectangle *p = rect_list_head;
+    LinkedRectangle *p_before = rect_list_head;
+    while (p_before!=rect_list_tail) {
+        p = p->next;
+        if (p==*lr) {
+            if (*lr==rect_list_tail) {                  // is only tail
+                rect_list_tail = p_before;
+                p_before->next = NULL;
+            }else {                                     // is typical node
+                p_before->next = p->next;
+            }
+            free(p);
+            num_rects--;
+            return 0;
+        }
+        p_before=p;
+    }
+}
+
+/**
+ * Prints the nodes of the list
+ */
+/*void rectangle_list_print() {
+    if (rect_list_head==NULL && rect_list_tail==NULL && num_rects==0){  // both null (list empty)
+        printf("Empty list");
+        return;
+    }
+    if (rect_list_head==NULL || rect_list_tail==NULL || num_rects==0){  // some null, but not all (corrupt empty)
+        printf("Corrupt list");
+        return;
+    }
+    LinkedRectangle *p = rect_list_head;
+
+    while (n != NULL) {
+        printf("print %p %p %s\n", p, p->next, rect_to_string(p->data));
+        p = p->next;
+    }
+}*/
 
 /**
  * Computes the sum of the pr differences (with the reference image) of all the blocks in the cumulus. If the given center
@@ -272,13 +395,14 @@ float sum_pr_diffs(int x_center, int y_center, int cumulus_size) {
  * @return int
  *      Irrelevant/not used.
  */
-int save_rectangle(Rectangle rect) {
+/*int save_rectangle(Rectangle rect) {
     (rectangles[0]).x1 = rect.x1;
     (rectangles[0]).y1 = rect.y1;
     (rectangles[0]).x2 = rect.x2;
     (rectangles[0]).y2 = rect.y2;
-    printf("Rectangulo guardado:\tx1=%d\ty1=%d\tx2=%d\ty2=%d\n", (rectangles[0]).x1, (rectangles[0]).y1, (rectangles[0]).x2, (rectangles[0]).y2);
-}
+    printf("Rectangulo guardado:\tx1=%d\ty1=%d\tx2=%d\ty2=%d\n", \
+            (rectangles[0]).x1, (rectangles[0]).y1, (rectangles[0]).x2, (rectangles[0]).y2);
+}*/
 
 /**
  * Calculates the pr sum of all the blocks on the cumuli (given block coordinates and cumulus size) and the possible new centers (8 closest neighbours)
@@ -556,7 +680,8 @@ int find_objects() {
                 rect = cumulus_to_rectangle(cumulus);
                 rect = reduce_rectangle_size(rect);
 
-                save_rectangle(rect);
+                rectangle_list_remove(&rect_list_head);
+                rectangle_list_add(&rect); //save_rectangle(rect);
                 return 0; //just need one rectangle for this version
             }
         }
@@ -641,14 +766,38 @@ int drawEdgeOfRectangle(int block_x, int block_y, int whichEdge) {
 
 /**
  * Draws the rectangles in the frame changing the luminance and chrominances in the edges of the rectangles.
- *
- * @return int
- *      Irrelevant/not used.
  */
-int draw_rectangles_in_frame() {
+void draw_rectangles_in_frame() {
     Rectangle rect;
+    LinkedRectangle *p = rect_list_head;
     // for each rectangle
-    for (int i = 0; i <= rect_index; ++i) {
+    if (rect_list_head==NULL && rect_list_tail==NULL && num_rects==0) return; // all null (list empty)
+    else while (p!=NULL){
+        rect = p->data;
+        for (int block_y = rect.y1; block_y <= rect.y2; block_y++) {
+            for (int block_x = rect.x1; block_x <= rect.x2; block_x++) {
+                // Draw top edges
+                if (block_y==rect.y1){
+                    drawEdgeOfRectangle(block_x, block_y, TOP_EDGE);
+                }
+                // Draw left edge
+                if (block_x==rect.x1){
+                    drawEdgeOfRectangle(block_x, block_y, LEFT_EDGE);
+                }
+                // Draw right edge
+                if (block_x==rect.x2){
+                    drawEdgeOfRectangle(block_x, block_y, RIGHT_EDGE);
+                }
+                // Draw bottom edge
+                if (block_y==rect.y2){
+                    drawEdgeOfRectangle(block_x, block_y, BOTTOM_EDGE);
+                }
+            }
+        }
+        p = p->next;
+    }
+
+    /*for (int i = 0; i <= num_rects; ++i) {
         rect = rectangles[i];
         for (int block_y = rect.y1; block_y <= rect.y2; block_y++) {
             for (int block_x = rect.x1; block_x <= rect.x2; block_x++) {
@@ -670,7 +819,7 @@ int draw_rectangles_in_frame() {
                 }
             }
         }
-    }
+    }*/
 }
 
 /**
@@ -689,7 +838,6 @@ void update_reference_frame(int position){
         }
     }
 }
-
 
 /**
  * Verifies if a frame is valid or not.
@@ -744,10 +892,16 @@ int is_frame_valid (int position){
 }
 
 
+
 ///  MAIN  ///
 int main( int argc, char** argv ) {
-    mode = MODE_BASE_IMAGE_INMEDIATE_PREVIOUS_FRAME; //MODE_BASE_IMAGE_INMEDIATE_PREVIOUS_FRAME    MODE_BASE_IMAGE_FIRST_FRAME
+    mode = MODE_BASE_IMAGE_INMEDIATE_PREVIOUS_FRAME; //MODE_BASE_IMAGE_INMEDIATE_PREVIOUS_FRAME   MODE_BASE_IMAGE_FIRST_FRAME
     
+printf("\n\
+         ___________________________________________________________________________ \n\
+        |                                                                           |\n\
+        |      OBJECTS DETECTION AND TRACKING VIA PERCEPTUAL RELEVANCE METRICS      |\n\
+        |___________________________________________________________________________|\n\n");
 
     char* imageName = argv[1];
     char* imageExt = argv[2];
@@ -760,10 +914,12 @@ int main( int argc, char** argv ) {
     int starting_frame;
 
     if (mode==MODE_BASE_IMAGE_FIRST_FRAME){
+        printf("\nUsing first frame as reference (auto-modified when 2 invalid frames in a row).\n\n");
         starting_frame = 0;
         buff_size = 2;
     }
     else if (mode == MODE_BASE_IMAGE_INMEDIATE_PREVIOUS_FRAME){
+        printf("\nUsing previous frame as reference.\n\n");
         starting_frame = 1;
         buff_size = BUFF_SIZE_OBJECT_DETECTION;
     }
@@ -793,16 +949,12 @@ int main( int argc, char** argv ) {
         
         //printf("a width = %d, height = %d, rgb_channels = %d\n", width, height, rgb_channels);
         if (initiated == 0) {
-            //printf("b1\n");
             init_pr_computation(width, height, rgb_channels);
-            //printf("b2\n");
-            rectangles_malloc();
-            //printf("b3\n");
+            //rectangles_malloc();
             initiated = 1;
-            //printf("b4\n");
         }
         
-        //printf("bn\n");
+        //printf("b\n");
         rgb = load_frame(image, width, height, rgb_channels);
 
         const size_t y_stride = width + (16-width%16)%16;
@@ -824,7 +976,7 @@ int main( int argc, char** argv ) {
         create_frame(0);
 
         if (frameNumber > starting_frame) {
-            if (is_frame_valid(position))//MODE_BASE_IMAGE_FIRST_FRAME || (is_frame_valid() && MODE_BASE_IMAGE_INMEDIATE_PREVIOUS_FRAME))
+            if (is_frame_valid(position))
                 find_objects();
             draw_rectangles_in_frame();
         }
