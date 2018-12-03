@@ -18,7 +18,7 @@
 
 ///  PREPROCESSOR MACROS  ///
 #define BUFF_SIZE_OBJECT_DETECTION 2
-#define MAX_NUM_RECTANGLES 20
+#define MAX_NUM_RECTANGLES 5
 
 #define MIN_PR_DIFF_TO_CONSIDER_CUMULUS 0.25    //0.25
 #define THRESHOLD_KEEP_RECTANGLE_EDGE 0.25      //0.3
@@ -31,7 +31,7 @@
 #define POSSIBLE_CUMULUS 1
 #define NOT_A_CUMULUS 0
 
-#define MAX_CUMULUS_SIZE 10
+#define MAX_CUMULUS_SIZE 8
 
 #define MODE_BASE_IMAGE_FIRST_FRAME 1
 #define MODE_BASE_IMAGE_INMEDIATE_PREVIOUS_FRAME 2
@@ -41,6 +41,8 @@
 #define MOV_INCR_PER_FRAME 0.01
 #define VALID_FRAME 1
 #define INVALID_FRAME 0
+
+#define MAX_RECTANGLE_CHANGE_PER_FRAME 2
 
 #define MIN(a,b) ((a) < (b) ? (a) : (b))
 #define MAX(a,b) ((a) > (b) ? (a) : (b))
@@ -111,13 +113,16 @@ void pr_changes(int image_position_buffer);
 
 int find_objects();
 
+int track_objects();
+int track_object(LinkedRectangle **lr);
+
 int is_cumulus_seed(int block_x, int block_y);
 
 Cumulus get_cumulus_centered(int block_x, int block_y);
 float* cumulus_pr_neighbours(int block_x, int block_y, int cumulus_size);
 float sum_pr_diffs(int x_center, int y_center, int cumulus_size);
 
-Rectangle reduce_rectangle_size(Rectangle rect);
+void reduce_rectangle_size(Rectangle *rect);
 int drop_upper_rows(Rectangle rect);
 int drop_lower_rows(Rectangle rect);
 int drop_left_columns(Rectangle rect);
@@ -644,19 +649,14 @@ int drop_right_columns(Rectangle rect) {
 /**
  * Given a rectangle, keeps or reduces its size to convert it in the smallest rectangle possible that emcompasses the object.
  *
- * @param Rectnagle rect
+ * @param *Rectnagle rect
  *      The rectangle to work with.    
- *
- * @return Rectangle
- *      The reduced size rectangle.
  */
-Rectangle reduce_rectangle_size(Rectangle rect) {
-    rect.y1 += drop_upper_rows(rect);
-    rect.y2 -= drop_lower_rows(rect);
-    rect.x1 += drop_left_columns(rect);
-    rect.x2 -= drop_right_columns(rect);
-    
-    return rect;
+void reduce_rectangle_size(Rectangle *rect) {
+    (*rect).y1 += drop_upper_rows(*rect);
+    (*rect).y2 -= drop_lower_rows(*rect);
+    (*rect).x1 += drop_left_columns(*rect);
+    (*rect).x2 -= drop_right_columns(*rect);
 }
 
 /**
@@ -678,14 +678,55 @@ int find_objects() {
                 //printf("cumulus seed found. block_x = %d \tblock_y = %d\n", block_x, block_y);
                 cumulus = get_cumulus_centered(block_x, block_y);
                 rect = cumulus_to_rectangle(cumulus);
-                rect = reduce_rectangle_size(rect);
+                reduce_rectangle_size(&rect);
 
-                rectangle_list_remove(&rect_list_head);
+                //rectangle_list_remove(&rect_list_head);
                 rectangle_list_add(&rect); //save_rectangle(rect);
                 return 0; //just need one rectangle for this version
             }
         }
     }
+}
+
+/**
+ * Tracks the objects in the previous frame, updating ther position and sizemage.
+ *
+ * @return int
+ *      Irrelevant/not used.
+ */
+int track_objects(){
+    if (rect_list_head==NULL && rect_list_tail==NULL && num_rects==0) return 0; // all null (list empty)
+    else if (rect_list_head==NULL || rect_list_tail==NULL || num_rects==0) return -1; // at least one null (list corrupt)
+    else{
+        LinkedRectangle *p = rect_list_head;
+        LinkedRectangle *p_before;
+         do {
+            track_object(&p);
+            //(p->data).x1=3;
+            p_before = p;
+            p = p->next;
+        } while (p_before!=rect_list_tail);
+    }
+}
+
+/**
+ * Updates the rectangle position and size. There is a max size change and a max movement.
+ *
+ * @return int
+ *      Irrelevant/not used.
+ */
+int track_object(LinkedRectangle **lr){
+    
+    Rectangle *rect = &((*lr)->data);
+
+    (*rect).x1 = MAX((*rect).x1 - MAX_RECTANGLE_CHANGE_PER_FRAME, 0);
+    (*rect).x2 = MIN((*rect).x2 + MAX_RECTANGLE_CHANGE_PER_FRAME, total_blocks_width);
+    (*rect).y1 = MAX((*rect).y1 - MAX_RECTANGLE_CHANGE_PER_FRAME, 0);
+    (*rect).y2 = MIN((*rect).y2 + MAX_RECTANGLE_CHANGE_PER_FRAME, total_blocks_height);
+
+    reduce_rectangle_size(rect);
+    
+    return 0;
 }
 
 /**
@@ -796,30 +837,6 @@ void draw_rectangles_in_frame() {
         }
         p = p->next;
     }
-
-    /*for (int i = 0; i <= num_rects; ++i) {
-        rect = rectangles[i];
-        for (int block_y = rect.y1; block_y <= rect.y2; block_y++) {
-            for (int block_x = rect.x1; block_x <= rect.x2; block_x++) {
-                // Draw top edges
-                if (block_y==rect.y1){
-                    drawEdgeOfRectangle(block_x, block_y, TOP_EDGE);
-                }
-                // Draw left edge
-                if (block_x==rect.x1){
-                    drawEdgeOfRectangle(block_x, block_y, LEFT_EDGE);
-                }
-                // Draw right edge
-                if (block_x==rect.x2){
-                    drawEdgeOfRectangle(block_x, block_y, RIGHT_EDGE);
-                }
-                // Draw bottom edge
-                if (block_y==rect.y2){
-                    drawEdgeOfRectangle(block_x, block_y, BOTTOM_EDGE);
-                }
-            }
-        }
-    }*/
 }
 
 /**
@@ -857,6 +874,7 @@ int is_frame_valid (int position){
     static int in_a_row_invalid_frames = 0; //first time is 0, then saves value between calls
     static float last_movement = 0.0; //first time is 0.0, then saves value between calls
     float movement = get_image_movement(0);
+    if (movement==0.0) return INVALID_FRAME;
 
     switch (mode){
         case MODE_BASE_IMAGE_INMEDIATE_PREVIOUS_FRAME:
@@ -897,7 +915,7 @@ int is_frame_valid (int position){
 int main( int argc, char** argv ) {
     mode = MODE_BASE_IMAGE_INMEDIATE_PREVIOUS_FRAME; //MODE_BASE_IMAGE_INMEDIATE_PREVIOUS_FRAME   MODE_BASE_IMAGE_FIRST_FRAME
     
-printf("\n\
+    printf("\n\
          ___________________________________________________________________________ \n\
         |                                                                           |\n\
         |      OBJECTS DETECTION AND TRACKING VIA PERCEPTUAL RELEVANCE METRICS      |\n\
@@ -976,8 +994,10 @@ printf("\n\
         create_frame(0);
 
         if (frameNumber > starting_frame) {
-            if (is_frame_valid(position))
+            if (is_frame_valid(position)){
                 find_objects();
+                track_objects();
+            }
             draw_rectangles_in_frame();
         }
 
