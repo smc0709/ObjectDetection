@@ -42,7 +42,8 @@
 #define VALID_FRAME 1
 #define INVALID_FRAME 0
 
-#define MAX_RECTANGLE_CHANGE_PER_FRAME 2
+#define MAX_RECTANGLE_CHANGE_PER_FRAME 1
+#define MAX_FRAMES_NOT_SEEN_UNTIL_REMOVING_RECTANGLE 10 //5 //15 //120
 
 #define MIN(a,b) ((a) < (b) ? (a) : (b))
 #define MAX(a,b) ((a) > (b) ? (a) : (b))
@@ -85,9 +86,9 @@ typedef struct {
     int cumulus_size;
 } Cumulus;
 
-// rectangles array
-//Rectangle *rectangles;
+// The number of rectangles
 int num_rects;
+
 
 // The mode used to detect objects (reference frame is always the first o the inmediately previous to the current)
 int mode;
@@ -95,19 +96,26 @@ int mode;
 // Simple linked list (with head and tail pointers) for saving the rectangles
 typedef struct linkedrectangle{
     Rectangle data;
+    int framesNotSeen;
     struct linkedrectangle *next;
 } LinkedRectangle;
 LinkedRectangle *rect_list_head;
 LinkedRectangle *rect_list_tail;
+
+// A mask indicating if the object detector should find 
+int **mask;
 
 
 
 ///  FUNCTION PROTOTYPES  ///
 //void rectangles_malloc();
 void rectangles_free();
-int save_rectangle(Rectangle rect);
+//int save_rectangle(Rectangle rect);
 LinkedRectangle* rectangle_list_add(Rectangle *rect);
 int rectangle_list_remove(LinkedRectangle **lr);
+
+void init_mask();
+void clean_mask();
 
 void pr_changes(int image_position_buffer);
 
@@ -229,6 +237,32 @@ void pr_changes(int image_position_buffer) {
 }
 
 /**
+ * Allocates memory for the mask. And calls clean_mask() to initialize the values.
+ */
+void init_mask(){
+    mask = malloc(total_blocks_height * sizeof(int *));
+    for (int i=0; i < total_blocks_height; i++) {
+        mask[i] = malloc(total_blocks_width * sizeof(int));
+    }
+
+    clean_mask();
+}
+
+/**
+ * Sets the mask to 1 in the borders (the two outer "blocks" in the frame) and 0 in the rest.
+ */
+void clean_mask(){
+    for (int i = 0; i < total_blocks_height; ++i) {
+        for (int j = 0; j < total_blocks_width; ++j) {
+            if (i<2 || i>total_blocks_height-2 || j<2 || j>total_blocks_width-2)
+                mask[i][j] = 1;
+            else
+                mask[i][j] = 0;
+        }
+    }
+}
+
+/**
  * Allocates resorces for storing the rectangles.
  */
 /*void rectangles_malloc() {
@@ -269,6 +303,7 @@ LinkedRectangle* rectangle_list_add(Rectangle *rect) {
 
     rect_list_tail = lr; // the new rectangle is the last element of the list
     lr->data = *rect;
+    lr->framesNotSeen = 0;
     lr->next = NULL;
     num_rects++;
     printf("Rectangulo guardado:\tx1=%d\ty1=%d\tx2=%d\ty2=%d\n", (lr->data).x1, (lr->data).y1, (lr->data).x2, (lr->data).y2);
@@ -312,7 +347,7 @@ int rectangle_list_remove(LinkedRectangle **lr) {
             }else {                                     // is typical node
                 p_before->next = p->next;
             }
-            free(p);
+            free(*lr);
             num_rects--;
             return 0;
         }
@@ -700,31 +735,76 @@ int track_objects(){
     else{
         LinkedRectangle *p = rect_list_head;
         LinkedRectangle *p_before;
-         do {
+        do {
             track_object(&p);
-            //(p->data).x1=3;
+            if (p == NULL || p->next == NULL){   // si se borra el último de la lista
+                return 0;
+            }
             p_before = p;
             p = p->next;
         } while (p_before!=rect_list_tail);
     }
+    return 0;
 }
 
 /**
- * Updates the rectangle position and size. There is a max size change and a max movement.
+ * Updates the rectangle position and size. There is a max size grow and a max movement.
  *
  * @return int
- *      Irrelevant/not used.
+ *      0 if rectangle is updated or kept and 1 if rectangle is removed.
  */
 int track_object(LinkedRectangle **lr){
-    
-    Rectangle *rect = &((*lr)->data);
+    int initial_x1, initial_x2, initial_y1, initial_y2;
+    //int upper_rows, lower_rows, left_columns, right_columns;
 
+    Rectangle *rect = &((*lr)->data);
+    int framesNotSeen = (*lr)->framesNotSeen;
+
+    // Save initial values
+    initial_x1 = (*rect).x1;
+    initial_x2 = (*rect).x2;
+    initial_y1 = (*rect).y1;
+    initial_y2 = (*rect).y2;
+
+    // Enlage rectangle
     (*rect).x1 = MAX((*rect).x1 - MAX_RECTANGLE_CHANGE_PER_FRAME, 0);
     (*rect).x2 = MIN((*rect).x2 + MAX_RECTANGLE_CHANGE_PER_FRAME, total_blocks_width);
     (*rect).y1 = MAX((*rect).y1 - MAX_RECTANGLE_CHANGE_PER_FRAME, 0);
     (*rect).y2 = MIN((*rect).y2 + MAX_RECTANGLE_CHANGE_PER_FRAME, total_blocks_height);
 
-    reduce_rectangle_size(rect);
+    //upper_rows    = drop_upper_rows(*rect);
+    (*rect).y1 += MIN(drop_upper_rows(*rect), 2*MAX_RECTANGLE_CHANGE_PER_FRAME);
+
+    //lower_rows    = drop_lower_rows(*rect);
+    (*rect).y2 -= MIN(drop_lower_rows(*rect), 2*MAX_RECTANGLE_CHANGE_PER_FRAME);
+
+    //left_columns  = drop_left_columns(*rect);
+    (*rect).x1 += MIN(drop_left_columns(*rect), 2*MAX_RECTANGLE_CHANGE_PER_FRAME);
+
+    //right_columns = drop_right_columns(*rect);
+    (*rect).x2 -= MIN(drop_right_columns(*rect), 2*MAX_RECTANGLE_CHANGE_PER_FRAME);
+    printf("---RECTANGLE---\n");
+    printf("INICIAL --> x1=%d\t y1=%d\t x1=%d\t y2=%d\n", initial_x1, initial_y1, initial_x2, initial_y2);
+    printf("FINAL   --> x1=%d\t y1=%d\t x1=%d\t y2=%d\n", (*rect).y2, (*rect).y1, (*rect).x2, (*rect).x1);
+
+
+    if ((*rect).y2 - (*rect).y1 <= 0 || (*rect).x2 - (*rect).x1 <=0) {
+        (*rect).y1 = initial_y1;
+        (*rect).y2 = initial_y2;
+        (*rect).x1 = initial_x1;
+        (*rect).x2 = initial_x2;
+        framesNotSeen++;
+        if (framesNotSeen >= MAX_FRAMES_NOT_SEEN_UNTIL_REMOVING_RECTANGLE) {
+            printf("removeeeeeeeeeeeeeeeeeeeeeeee\n");
+            rectangle_list_remove(lr);
+            lr = NULL;
+            return 1;
+        }
+    } else{
+        framesNotSeen = 0;
+    }
+    (*lr)->framesNotSeen = framesNotSeen;
+    //reduce_rectangle_size(rect);
     
     return 0;
 }
@@ -874,7 +954,7 @@ int is_frame_valid (int position){
     static int in_a_row_invalid_frames = 0; //first time is 0, then saves value between calls
     static float last_movement = 0.0; //first time is 0.0, then saves value between calls
     float movement = get_image_movement(0);
-    if (movement==0.0) return INVALID_FRAME;
+    //if (movement==0.0) return INVALID_FRAME;
 
     switch (mode){
         case MODE_BASE_IMAGE_INMEDIATE_PREVIOUS_FRAME:
@@ -956,7 +1036,7 @@ int main( int argc, char** argv ) {
             strcat(image, imageExt);
         }
 
-        printf("%s\n", image);
+        printf("\n\n%s\n", image);
 
         BITMAPINFOHEADER bitmapInfoHeader;
 
@@ -968,6 +1048,7 @@ int main( int argc, char** argv ) {
         //printf("a width = %d, height = %d, rgb_channels = %d\n", width, height, rgb_channels);
         if (initiated == 0) {
             init_pr_computation(width, height, rgb_channels);
+            init_mask();
             //rectangles_malloc();
             initiated = 1;
         }
