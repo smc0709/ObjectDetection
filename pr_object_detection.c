@@ -113,7 +113,7 @@ int **mask;
 
 ///  FUNCTION PROTOTYPES  ///
 void rectangles_free();
-LinkedRectangle* rectangle_list_add(Rectangle *rect);
+LinkedRectangle* rectangle_list_add(Rectangle **rect);
 int rectangle_list_remove(LinkedRectangle **lr);
 
 void init_mask();
@@ -126,7 +126,7 @@ void pr_changes(int image_position_buffer);
 int find_objects();
 
 int track_objects();
-int track_object(LinkedRectangle **lr);
+LinkedRectangle* track_object(LinkedRectangle **lr);
 
 int is_cumulus_seed(int block_x, int block_y);
 
@@ -308,7 +308,16 @@ void add_rectangle_to_mask(LinkedRectangle **lr){
  */
 void rectangles_free() {
     if (rect_list_head==NULL && rect_list_tail==NULL && num_rects==0) return; // all null (list empty)
-    else while (rect_list_head!=NULL) rectangle_list_remove(&rect_list_head);
+    else if (rect_list_head==NULL || rect_list_tail==NULL || num_rects==0) printf("ERROR list corrupt.\n");  // at least one null (list corrupt)
+    else{
+        LinkedRectangle *p = rect_list_head;
+        LinkedRectangle *p_before;
+        do {
+            p_before = p;
+            p = p->next;
+            rectangle_list_remove(&p_before);
+        } while (p!=NULL);
+    }
     if (!(rect_list_head==NULL && rect_list_tail==NULL && num_rects==0)) printf("ERROR freeing rectangles list.\n");
 }
 
@@ -316,18 +325,25 @@ void rectangles_free() {
  * Adds the specified rectangle to the end of the linked list. Updates num_rects(+=1), *rect_list_head and *rect_list_tail and
  * allocates memory space for the node.
  *
- * @param Rectangle *rect
+ * @param Rectangle **rect
  *      The pointer to the rectangle to be added to the list. Note: rectangle memory must be already allocated.
  * 
  * @return LinkedRectangle*
  *      The rectangle node created.
  */
-LinkedRectangle* rectangle_list_add(Rectangle *rect) {
-    if (num_rects>=MAX_NUM_RECTANGLES) return NULL;                            // list is full
+LinkedRectangle* rectangle_list_add(Rectangle **rect) {
+    if (num_rects>=MAX_NUM_RECTANGLES){                                         // list is full
+        free(*rect);
+        (*rect) = NULL;
+        return NULL;
+    }
 
     LinkedRectangle *lr = (LinkedRectangle *)malloc(sizeof(LinkedRectangle));
-    if (lr==NULL) return NULL;                                                  // no memory
-
+    if (lr==NULL) {                                                             // no memory
+        free(*rect);
+        (*rect) = NULL;
+        return NULL;
+    }
     if (rect_list_head==NULL && rect_list_tail==NULL && num_rects==0)           // all null (list empty)
         rect_list_head = lr; // the new rectangle is the first element of the list
     else if (rect_list_head==NULL || rect_list_tail==NULL || num_rects==0)      // one null but the other(s) not
@@ -336,7 +352,7 @@ LinkedRectangle* rectangle_list_add(Rectangle *rect) {
         rect_list_tail->next = lr;
 
     rect_list_tail = lr; // the new rectangle is the last element of the list
-    lr->data = rect;
+    lr->data = *rect;
     lr->frames_not_seen = 0;
     lr->next = NULL;
     num_rects++;
@@ -355,7 +371,7 @@ LinkedRectangle* rectangle_list_add(Rectangle *rect) {
  *      Returns 0 if node was removed correctly, 1 in other cases (null reference, empty list, ect.)
  */
 int rectangle_list_remove(LinkedRectangle **lr) {
-    if (*lr == NULL) return 1;                           // bad parameter
+    if (*lr==NULL) return 1;                           // bad parameter
     if (rect_list_head==NULL || rect_list_tail==NULL || num_rects==0) return 1;      // any null (list empty or corrupt)
     
     if (*lr==rect_list_head) {
@@ -365,7 +381,10 @@ int rectangle_list_remove(LinkedRectangle **lr) {
         }else{                                          // is only head
             rect_list_head = rect_list_head->next;
         }
+        free((*lr)->data);
+        (*lr)->data = NULL;
         free(*lr);
+        *lr = NULL;
         num_rects--;
         return 0;
     }
@@ -381,7 +400,10 @@ int rectangle_list_remove(LinkedRectangle **lr) {
             }else {                                     // is typical node
                 p_before->next = p->next;
             }
+            free((*lr)->data);
+            (*lr)->data = NULL;
             free(*lr);
+            *lr = NULL;
             num_rects--;
             return 0;
         }
@@ -485,6 +507,8 @@ int is_cumulus_seed(int block_x, int block_y) {
               pr_values[6]==0.0 && pr_values[7]==0.0 && pr_values[8]==0.0)) {
             is_cumulus = POSSIBLE_CUMULUS;
         }
+        free(pr_values);
+        pr_values = NULL;
     }
     return is_cumulus;
 }
@@ -523,6 +547,7 @@ Cumulus get_cumulus_centered(int block_x, int block_y) {
                 cumulus.y_center += (index_new_center/3)-1;     //y_center += i
             }
             free(pr_values);
+            pr_values = NULL;
         } while (index_new_center!=4);
         cumulus.cumulus_size = cumulus_size;
     }
@@ -531,17 +556,17 @@ Cumulus get_cumulus_centered(int block_x, int block_y) {
 }
 
 /**
- * Transforms a cumulus to a rectangle.
+ * Transforms a cumulus to a rectangle. Allocates memory for the rectangle.
  *
  * @param Cumulus cumulus
  *      The cumulus to transform.    
  *
  * @return *Rectangle
- *      The rectangle that encloses the cumulus.
+ *      The rectangle that encloses the cumulus. Remember to free memory.
  */
 Rectangle* cumulus_to_rectangle(Cumulus cumulus){
     Rectangle *rect = (Rectangle *)malloc(sizeof(Rectangle));
-    if (rect ==NULL){
+    if (rect==NULL){
         printf("ERROR: no memory\n");
         return NULL;
     }
@@ -690,8 +715,7 @@ int find_objects() {
                 rect = cumulus_to_rectangle(cumulus);
                 reduce_rectangle_size(rect);
 
-                //rectangle_list_remove(&rect_list_head);
-                rectangle_list_add(rect); //save_rectangle(rect);
+                rectangle_list_add(&rect);
                 return 0; //just need one rectangle for this version
             }
         }
@@ -711,12 +735,9 @@ int track_objects(){
         LinkedRectangle *p = rect_list_head;
         LinkedRectangle *p_before;
         do {
-            track_object(&p);
-            if (p == NULL || p->next == NULL){   // si se borra el último de la lista
-                return 0;
-            }
             p_before = p;
-            p = p->next;
+            p = track_object(&p);
+            if (p == NULL) return 0;            // si se borra el último de la lista
         } while (p_before!=rect_list_tail);
     }
     return 0;
@@ -730,13 +751,19 @@ int track_objects(){
  *
  * @return int
  *      0 if rectangle is updated or kept and 1 if rectangle is removed.
+ * 
+ * @return LinkedRectangle *next
+ *      The next rectangle in the list.
  */
-int track_object(LinkedRectangle **lr){
+LinkedRectangle* track_object(LinkedRectangle **lr){
     int initial_x1, initial_x2, initial_y1, initial_y2;
     int upper_rows, lower_rows, left_columns, right_columns;
     int x1_enlarged, x2_enlarged, y1_enlarged, y2_enlarged, x1_enlargement, x2_enlargement, y1_enlargement, y2_enlargement;
 
+    if ((*lr)==NULL) return NULL;
+
     Rectangle *rect = (*lr)->data;
+    LinkedRectangle *next = (*lr)->next;
     int frames_not_seen = (*lr)->frames_not_seen;
 
     // Save initial values
@@ -797,16 +824,15 @@ int track_object(LinkedRectangle **lr){
         if (frames_not_seen >= MAX_FRAMES_NOT_SEEN_UNTIL_REMOVING_RECTANGLE) {
             rectangle_list_remove(lr);
             if (TRACE_LEVEL>=1) printf("Rectangle removed\n");
-            lr = NULL;
-            return 1;
+            *lr = NULL;
+            return next;
         }
     } else{
         frames_not_seen = 0;
     }
     (*lr)->frames_not_seen = frames_not_seen;
-    //reduce_rectangle_size(rect);
     
-    return 0;
+    return next;
 }
 
 /**
@@ -1063,6 +1089,9 @@ int main( int argc, char** argv ) {
         const size_t rgb_stride = width*3 +(16-(3*width)%16)%16;
 
         rgb24_yuv420_std(width, height, rgb, rgb_stride, y, u, v, y_stride, uv_stride, YCBCR_601);
+
+        free(rgb);
+        rgb = NULL;
         
         int position; //int position = MIN(frameNumber, 1); //int position = (frameNumber-1)%BUFF_SIZE_OBJECT_DETECTION;
         if (mode==MODE_BASE_IMAGE_FIRST_FRAME)
