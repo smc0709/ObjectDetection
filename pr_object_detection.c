@@ -56,7 +56,7 @@
 ///  GLOBAL VARIABLES  ///
 
 /**
- * Rectangle: to represent the object locations (2 ints define left upper corner and 2 other ints, the right lower corner)
+ * Rectangle: represents the object locations (2 ints define left upper corner and 2 other ints, the right lower corner)
  *  x1, y1
  *  +------------------+
  *  |                  |
@@ -72,7 +72,7 @@ typedef struct {
 } Rectangle;
 
 /**
- * Cumulus: to represent the zones where there are many blocks with "reatively high" pr difference respect to the ref frame
+ * Cumulus: represents the zones where there are some blocks with "relatively high" pr difference respect to the ref frame
  *   +---------------+  -+           -+
  *   |               |   |            |
  *   |               |   |- size      |
@@ -93,7 +93,7 @@ typedef struct {
 int num_rects;
 
 
-// The mode used to detect objects (reference frame is always the first o the inmediately previous to the current)
+// The mode used to detect objects (reference frame is always the first o the immediately previous to the current)
 int mode;
 
 // Simple linked list (with head and tail pointers) for saving the rectangles
@@ -105,8 +105,8 @@ typedef struct linkedrectangle{
 LinkedRectangle *rect_list_head;
 LinkedRectangle *rect_list_tail;
 
-// A mask indicating if the object detector should find rectangles in some blocks or not (rectangles overlapping only
-//when moving, not in finding)
+// A mask indicating if the object detector should find rectangles in some blocks or not (rectangles should be able to
+// overlap only when moving, not in finding).
 int **mask;
 
 
@@ -151,54 +151,15 @@ int is_frame_valid (int position);
 
 ///  FUNCTION IMPLEMENTATIONS  ///
 
-// SUBSTITUTE with an adapted pr_to_movement to have position buffer tunable to use the differences with the frame 0
+// If the mode that uses first frame as reference is finally deleted, this method can be substituted by pr_to_movement()
+// from the pereptual_relevance_api.h library
+/**
+ * Calculates the differences of the current frame with the reference one, and saves the result in the buffer.
+ *
+ * @param int image_position_buffer
+ *      The position of the of the current image buffer.
+ */
 void pr_changes(int image_position_buffer) {
-    /*int ref_image_position_buffer;
-    
-    switch (mode) {
-        case MODE_BASE_IMAGE_FIRST_FRAME:
-            if (image_position_buffer==0) {
-                diffs_x = pr_x_buff[0];
-                diffs_y = pr_y_buff[0];
-                return;
-            }
-            ref_image_position_buffer = 0;
-            break;
-        case MODE_BASE_IMAGE_INMEDIATE_PREVIOUS_FRAME:
-            ref_image_position_buffer = image_position_buffer - 1;
-            if (ref_image_position_buffer < 0)
-                ref_image_position_buffer = buff_size - 1;
-            break;
-        default:
-            printf("ERROR: mode not defined\n");
-            return;
-    }
-
-    
-    for (int i = 0; i < total_blocks_width + 1; i++){
-        for (int j = 0; j < total_blocks_height + 1; j++){
-            diffs_x[j][i] = pr_x_buff[image_position_buffer][j][i] - pr_x_buff[ref_image_position_buffer][j][i];
-            diffs_y[j][i] = pr_y_buff[image_position_buffer][j][i] - pr_y_buff[ref_image_position_buffer][j][i];
-            if (diffs_x[j][i] < 0) diffs_x[j][i] = -diffs_x[j][i];
-            if (diffs_y[j][i] < 0) diffs_y[j][i] = -diffs_y[j][i];
-        }
-    }*/
-    
-
-
-    /*for (int i = 0; i < total_blocks_width + 1; i++){
-        for (int j = 0; j < total_blocks_height + 1; j++){
-            if (image_position_buffer==0) {
-                diffs_x[j][i] = pr_x_buff[0][j][i];
-                diffs_y[j][i] = pr_y_buff[0][j][i];
-            } else {
-                diffs_x[j][i] = pr_x_buff[image_position_buffer][j][i] - pr_x_buff[0][j][i];
-                diffs_y[j][i] = pr_y_buff[image_position_buffer][j][i] - pr_y_buff[0][j][i];
-            }
-            if (diffs_x[j][i] < 0) diffs_x[j][i] = -diffs_x[j][i];
-            if (diffs_y[j][i] < 0) diffs_y[j][i] = -diffs_y[j][i];
-        }
-    }*/
 
     int prev_image_position_buffer;
     switch (mode) {
@@ -234,7 +195,7 @@ void pr_changes(int image_position_buffer) {
             }
             break;
         default:
-            printf("ERROR: mode not defined\n");
+            printf("ERROR: mode not defined.\n");
             return;
     }
 }
@@ -304,11 +265,11 @@ void add_rectangle_to_mask(LinkedRectangle **lr){
 }
 
 /**
- * Frees the resorces allocated for storing the rectangles.
+ * Frees the resources allocated for storing the rectangles.
  */
 void rectangles_free() {
     if (rect_list_head==NULL && rect_list_tail==NULL && num_rects==0) return; // all null (list empty)
-    else if (rect_list_head==NULL || rect_list_tail==NULL || num_rects==0) printf("ERROR list corrupt.\n");  // at least one null (list corrupt)
+    else if (rect_list_head==NULL || rect_list_tail==NULL || num_rects==0) printf("ERROR: list corrupt.\n");  // at least one null (list corrupt)
     else{
         LinkedRectangle *p = rect_list_head;
         LinkedRectangle *p_before;
@@ -318,12 +279,12 @@ void rectangles_free() {
             rectangle_list_remove(&p_before);
         } while (p!=NULL);
     }
-    if (!(rect_list_head==NULL && rect_list_tail==NULL && num_rects==0)) printf("ERROR freeing rectangles list.\n");
+    if (!(rect_list_head==NULL && rect_list_tail==NULL && num_rects==0)) printf("ERROR while freeing rectangles list.\n");
 }
 
 /**
- * Adds the specified rectangle to the end of the linked list. Updates num_rects(+=1), *rect_list_head and *rect_list_tail and
- * allocates memory space for the node.
+ * Adds the specified rectangle to the end of the linked list. Updates num_rects(+=1), *rect_list_head and *rect_list_tail 
+ *      and allocates memory space for the node.
  *
  * @param Rectangle **rect
  *      The pointer to the rectangle to be added to the list. Note: rectangle memory must be already allocated.
@@ -356,13 +317,13 @@ LinkedRectangle* rectangle_list_add(Rectangle **rect) {
     lr->frames_not_seen = 0;
     lr->next = NULL;
     num_rects++;
-    if (TRACE_LEVEL>=1) printf("Rectangulo guardado:\tx1=%d\ty1=%d\tx2=%d\ty2=%d\n", (lr->data)->x1, (lr->data)->y1, (lr->data)->x2, (lr->data)->y2);
+    if (TRACE_LEVEL>=1) printf("Saved rectangle:\tx1=%d\ty1=%d\tx2=%d\ty2=%d\n", (lr->data)->x1, (lr->data)->y1, (lr->data)->x2, (lr->data)->y2);
     return lr;
 }
 
 /**
  * Removes a specified rectangle from the linked list.  Updates num_rects(-=1), *rect_list_head and *rect_list_tail and
- * frees memory space of the node.
+ *      frees memory space of the node.
  *
  * @param LinkedRectangle **lr
  *      The rectangle to remove from the list.
@@ -413,7 +374,8 @@ int rectangle_list_remove(LinkedRectangle **lr) {
 
 /**
  * Computes the sum of the pr differences (with the reference image) of all the blocks in the cumulus. If the given center
- * is out of the borders of the image, a value of 0.0 is returned, in order not to be selected as the best center.
+ *      is out of the borders of the image, a value of 0.0 is returned, in order not to be selected as the best center.
+ *      Out of bounds blocks are not included in the sum.
  *
  * @param int x_center
  *      The x coordinate of the block which is the center of the cumulus.    
@@ -443,14 +405,9 @@ float sum_pr_diffs(int x_center, int y_center, int cumulus_size) {
     x_max = x_center + b;
     y_max = y_center + b;
 
-    //x_min = x_center - cumulus_size/2;
-    //y_min = y_center - cumulus_size/2;
-    //x_max = x_center + cumulus_size/2 + cumulus_size%2;
-    //y_max = y_center + cumulus_size/2 + cumulus_size%2;
-
     sum = 0.0;
-    for (int x = x_min; x <= x_max; ++x) {   //if ..x<=x_max.. then get_block_movement will segfault (it avegrages with x+1)
-        for (int y = y_min; y <= y_max; ++y) {   //same with y
+    for (int x = x_min; x <= x_max; ++x) {
+        for (int y = y_min; y <= y_max; ++y) {
             if (!(x<0 || y<0 || x>total_blocks_width-1 || y>total_blocks_height-1)){       // if NOT out of image bounds
                 sum += get_block_movement(x, y);
             }
@@ -460,7 +417,9 @@ float sum_pr_diffs(int x_center, int y_center, int cumulus_size) {
 }
 
 /**
- * Calculates the pr sum of all the blocks on the cumuli (given block coordinates and cumulus size) and the possible new centers (8 closest neighbours)
+ * Calculates the pr sums of all blocks of each possible cumulus.  The possible centers (8 closest neighbours and the
+ *      current one). To calculate the pr sum of a cumulus, takes into account all the blocks inside the cumulus_size
+ *      radius.
  * 
  * @param int block_x
  *      The x block coordinate.
@@ -470,7 +429,8 @@ float sum_pr_diffs(int x_center, int y_center, int cumulus_size) {
  *      Indicates the size of the cumulus. 1 means 1x1 cumulus, 2 means 2x2, etc.
  *
  * @return float*
- *      Returns the array of sums of PRs. Always 9 positions. Remember to free memory.
+ *      Returns the array of sums of PRs of each possible center. Always 9 positions with allocated memory (remember to
+ *      free it).
  */
 float* cumulus_pr_neighbours(int block_x, int block_y, int cumulus_size) {
     int ij_index;
@@ -493,7 +453,8 @@ float* cumulus_pr_neighbours(int block_x, int block_y, int cumulus_size) {
  *      The y coordinate of the block that is asked to be considered cumulus.
  *
  * @return int
- *      Returns NOT_A_CUMULUS is the coordinates do not meet the requirements to be consedered a cumulus, and POSSIBLE_CUMULUS if they are met.
+ *      Returns NOT_A_CUMULUS if the coordinates do not meet the requirements to be considered a cumulus, and returns
+ *      POSSIBLE_CUMULUS if they are met.
  */
 int is_cumulus_seed(int block_x, int block_y) {
     float *pr_values;
@@ -586,8 +547,9 @@ Rectangle* cumulus_to_rectangle(Cumulus cumulus){
 }
 
 /**
- * These four functions keep the same structure. They find the number of border lines that can be eliminated from one side (top/bottom/left/right)
- * of the rectangle to keep it the smallest but still emcompassing the object.
+ * These four functions ("drop_side_row/col()") keep the same structure. They find the number of border lines that can be
+ *      eliminated from one side (top/bottom/left/right) of the rectangle to keep it the smallest but still emcompassing
+ *      the object.
  *
  * @param Rectangle rect
  *      The rectangle to work with.    
@@ -681,7 +643,7 @@ int drop_right_columns(Rectangle rect) {
 }
 
 /**
- * Given a rectangle, keeps or reduces its size to convert it in the smallest rectangle possible that emcompasses the object.
+ * Given a rectangle, keeps or reduces its size to convert it in the smallest rectangle possible that encloses the object.
  *
  * @param *Rectnagle rect
  *      The rectangle to work with.    
@@ -694,8 +656,9 @@ void reduce_rectangle_size(Rectangle *rect) {
 }
 
 /**
- * Finds the objects in the frame. Starts analyzing the possible cumuli of blocks with high pr difference relative to the base image. After an
- *      iterative process of finding the best cumuli center and refining the size, defines the rectangle that encloses the object and saves it.
+ * Finds the objects in the frame. Starts analyzing the possible cumuli of blocks with high pr difference relative to the
+ *      base image. After an iterative process of finding the best cumuli center and refining the size, defines the
+ *      rectangle that encloses the object and saves it.
  *
  * @return int
  *      Irrelevant/not used.
@@ -703,13 +666,13 @@ void reduce_rectangle_size(Rectangle *rect) {
 int find_objects() {
     Rectangle *rect;
     Cumulus cumulus;
-    if (TRACE_LEVEL>=1) printf("finding...\n");
+    if (TRACE_LEVEL>=1) printf("Searching...\n");
     for (int block_y=0; block_y<total_blocks_height; block_y++) {
         for (int block_x=0; block_x<total_blocks_width; block_x++) {
             if (TRACE_LEVEL>=3) printf("block_x=%d - - - block_y=%d\n", block_x, block_y);
 
             if (is_cumulus_seed(block_x, block_y)){
-                if (TRACE_LEVEL>=3) printf("cumulus seed found. block_x = %d \tblock_y = %d\n", block_x, block_y);
+                if (TRACE_LEVEL>=3) printf("Cumulus seed found: \tblock_x = %d \tblock_y = %d\n", block_x, block_y);
                 cumulus = get_cumulus_centered(block_x, block_y);
 
                 rect = cumulus_to_rectangle(cumulus);
@@ -748,9 +711,6 @@ int track_objects(){
  *
  * @param LinkedRectangle **lr
  *      The rectangle to be tracked (keep, update position and size, or delete).
- *
- * @return int
- *      0 if rectangle is updated or kept and 1 if rectangle is removed.
  * 
  * @return LinkedRectangle *next
  *      The next rectangle in the list.
@@ -823,7 +783,7 @@ LinkedRectangle* track_object(LinkedRectangle **lr){
         frames_not_seen++;
         if (frames_not_seen >= MAX_FRAMES_NOT_SEEN_UNTIL_REMOVING_RECTANGLE) {
             rectangle_list_remove(lr);
-            if (TRACE_LEVEL>=1) printf("Rectangle removed\n");
+            if (TRACE_LEVEL>=1) printf("Rectangle removed.\n");
             *lr = NULL;
             return next;
         }
@@ -836,7 +796,8 @@ LinkedRectangle* track_object(LinkedRectangle **lr){
 }
 
 /**
- * Draws the specified edge in the block specified changing the luminance and chrominances in the corresponding edge of the block.
+ * Draws the specified edge in the block specified changing the luminance and chrominances in the corresponding edge of the
+ *      block.
  *
  * @param int block_x
  *      The x coordinate of the block in which the rectangle edge should be drawn.    
@@ -905,7 +866,7 @@ int drawEdgeOfRectangle(int block_x, int block_y, int whichEdge) {
         break;
 
         default:
-            printf("ERROR\n");
+            printf("ERROR: incorrect rectangle side.\n");
             return -1;
     }
     return 0;
@@ -974,7 +935,7 @@ void update_reference_frame(int position){
  * @param int block_y
  *      The y coordinate of the block in which the rectangle edge should be drawn.
  * @param int whichEdge
- *      Indicates which of the edges should be drawn in the block (top, bottom, left or right). Implemented with preprocesor definitions.
+ *      Indicates which of the edges should be drawn in the block (top, bottom, left or right).
  *
  * @return int
  *      If frame is valid returns VALID_FRAME (1), else returns INVALID_FRAME (0).
@@ -1012,7 +973,7 @@ int is_frame_valid (int position){
             break;
 
         default: 
-            printf("ERROR\n");
+            printf("ERROR: incorrect mode.\n");
             return INVALID_FRAME;
     }
 
