@@ -13,7 +13,9 @@
 #include "./PRMovement/imgutils.h"
 #include "./PRMovement/perceptual_relevance_api.h"
 #include <math.h>
-
+//#include <stdio.h>
+//#include <stdint.h>
+#include <time.h>
 
 
 ///  PREPROCESSOR MACROS  ///
@@ -47,6 +49,9 @@
 
 #define MIN(a,b) ((a) < (b) ? (a) : (b))
 #define MAX(a,b) ((a) > (b) ? (a) : (b))
+
+#define OUTPUT_COLOURED_FRAME 0     // 1 to output the frame with rectangles, 0 to output black&white blocks
+#define MEASURE_TIME_ELAPSED 0      // 1 to measure, 0 not to measure
 
 #define TRACE_LEVEL 0   // How much information is printed in the console. The higher, the more info is printed
                         // -1 shows nothing, 0 shows basic, etc. Accepted values: -1, 0, 1, 2, 3
@@ -986,6 +991,11 @@ int is_frame_valid (int position){
 int main( int argc, char** argv ) {
     mode = MODE_BASE_IMAGE_INMEDIATE_PREVIOUS_FRAME; //MODE_BASE_IMAGE_INMEDIATE_PREVIOUS_FRAME   MODE_BASE_IMAGE_FIRST_FRAME
     
+    //if (MEASURE_TIME_ELAPSED){
+        struct timespec time_start, time_end;
+        uint64_t time_elapsed = 0;
+    //}
+
     if (TRACE_LEVEL>=0) printf("\n\
          ___________________________________________________________________________ \n\
         |                                                                           |\n\
@@ -1060,11 +1070,17 @@ int main( int argc, char** argv ) {
         else if (mode==MODE_BASE_IMAGE_INMEDIATE_PREVIOUS_FRAME)
             position = (frameNumber-1)%BUFF_SIZE_OBJECT_DETECTION;
 
+        if (MEASURE_TIME_ELAPSED){
+            clock_gettime(CLOCK_MONOTONIC, &time_start);
+        }
+
         lhe_advanced_compute_perceptual_relevance (y, pr_x_buff[position], pr_y_buff[position]);
 
         pr_changes(position);
         
-        create_frame(0);
+        if (!OUTPUT_COLOURED_FRAME) {
+            create_frame(0);
+        }
 
         if (frameNumber > starting_frame) {
             if (is_frame_valid(position)){
@@ -1076,12 +1092,21 @@ int main( int argc, char** argv ) {
             draw_rectangles_in_frame();
         }
 
+        if (MEASURE_TIME_ELAPSED){
+            clock_gettime(CLOCK_MONOTONIC, &time_end);
+            time_elapsed += ((time_end.tv_sec * 1000000000) + time_end.tv_nsec) - ((time_start.tv_sec * 1000000000) + time_start.tv_nsec);
+        }
+
         char frameName[100];
         sprintf(frameName,"./output/output%i.bmp",frameNumber);
         if (TRACE_LEVEL>=1) printf("Output: %s\n", frameName);
         yuv420_rgb24_std(width, height, y, u, v, y_stride, uv_stride, rec_rgb, rgb_stride, YCBCR_601);
         stbi_write_bmp(frameName, width, height, rgb_channels, rec_rgb);
 
+    }
+    if (MEASURE_TIME_ELAPSED) {
+        printf("\n\nThe total time elapsed is: %lf miliseconds approximately.\n", ((double)time_elapsed/1000000));
+        printf("The elapsed time per frame is: %lf miliseconds approximately.\n\n", ((double)time_elapsed/1000000)/(double)frame);
     }
     close_pr_computation();
     rectangles_free();
