@@ -47,13 +47,15 @@
 #define MAX_RECTANGLE_CHANGE_PER_FRAME 1
 #define MAX_FRAMES_NOT_SEEN_UNTIL_REMOVING_RECTANGLE 10 //5 //15 //120
 
+#define USABLE_BORDER 3     // Number of blocks from the edge inwards of mask with value 1 (where objects are searched)
+
 #define MIN(a,b) ((a) < (b) ? (a) : (b))
 #define MAX(a,b) ((a) > (b) ? (a) : (b))
 
 #define OUTPUT_COLOURED_FRAME 0     // 1 to output the frame with rectangles, 0 to output black&white blocks
 #define MEASURE_TIME_ELAPSED 0      // 1 to measure, 0 not to measure
 
-#define TRACE_LEVEL 0   // How much information is printed in the console. The higher, the more info is printed
+#define TRACE_LEVEL 1   // How much information is printed in the console. The higher, the more info is printed
                         // -1 shows nothing, 0 shows basic, etc. Accepted values: -1, 0, 1, 2, 3
 
 
@@ -123,6 +125,8 @@ int rectangle_list_remove(LinkedRectangle **lr);
 
 void init_mask();
 void clean_mask();
+void print_mask();
+
 int add_rectangles_to_mask();
 void add_rectangle_to_mask(LinkedRectangle **lr);
 
@@ -137,14 +141,14 @@ int is_cumulus_seed(int block_x, int block_y);
 
 Cumulus get_cumulus_centered(int block_x, int block_y);
 float* cumulus_pr_neighbours(int block_x, int block_y, int cumulus_size);
-float sum_pr_diffs(int x_center, int y_center, int cumulus_size);
+float sum_pr_diffs(int x_center, int y_center, int cumulus_size, int use_mask);
 Rectangle* cumulus_to_rectangle(Cumulus cumulus);
 
 void reduce_rectangle_size(Rectangle *rect);
-int drop_upper_rows(Rectangle rect);
-int drop_lower_rows(Rectangle rect);
-int drop_left_columns(Rectangle rect);
-int drop_right_columns(Rectangle rect);
+int drop_upper_rows(Rectangle rect, int use_mask);
+int drop_lower_rows(Rectangle rect, int use_mask);
+int drop_left_columns(Rectangle rect, int use_mask);
+int drop_right_columns(Rectangle rect, int use_mask);
 
 int drawEdgeOfRectangle(int block_x, int block_y, int whichEdge);
 void draw_rectangles_in_frame();
@@ -209,9 +213,9 @@ void pr_changes(int image_position_buffer) {
  * Allocates memory for the mask. And calls clean_mask() to initialize the values.
  */
 void init_mask(){
-    mask = malloc(total_blocks_width * sizeof(int *));
-    for (int y=0; y < total_blocks_width; ++y) {
-        mask[y] = malloc(total_blocks_height * sizeof(int));
+    mask = malloc(total_blocks_height * sizeof(int *));
+    for (int y=0; y < total_blocks_height; ++y) {
+        mask[y] = malloc(total_blocks_width * sizeof(int));
     }
 
     clean_mask();
@@ -223,11 +227,24 @@ void init_mask(){
 void clean_mask(){
     for (int y = 0; y < total_blocks_height; ++y) {
         for (int x = 0; x < total_blocks_width; ++x) {
-            if (y<2 || y>total_blocks_height-2 || x<2 || x>total_blocks_width-2)
-                mask[x][y] = 1;
+            if (y<USABLE_BORDER || y>total_blocks_height-USABLE_BORDER-1 || x<USABLE_BORDER \
+                || x>total_blocks_width-USABLE_BORDER-1)
+                mask[y][x] = 1;
             else
-                mask[x][y] = 0;
+                mask[y][x] = 0;
         }
+    }
+}
+
+/**
+ * Prints the mask in the console.
+ */
+void print_mask() {
+    for (int y = 0; y < total_blocks_height; ++y) {
+        for (int x = 0; x < total_blocks_width; ++x) {
+            printf("%d  ", mask[y][x]);
+        }
+        printf("\n");
     }
 }
 
@@ -262,9 +279,11 @@ void add_rectangle_to_mask(LinkedRectangle **lr){
     int x, y;
     Rectangle *rect = (*lr)->data;
 
-    for (x = rect->x1; x <= rect->x2; ++x) {
-        for (y = rect->y1; y <= rect->y2; ++y) {
-            mask[x][y] = 1;
+    for (x = (rect->x1)-1; x <= (rect->x2)+1; ++x) {        // -1 and +1 in the loop due to extra border
+        for (y = (rect->y1)-1; y <= (rect->y2)+1; ++y) {    // -1 and +1 in the loop due to extra border
+            if (!(x<0 || y<0 || x>total_blocks_width-1 || y>total_blocks_height-1)){
+                mask[y][x] = 0;
+            }
         }
     }
 }
@@ -388,11 +407,13 @@ int rectangle_list_remove(LinkedRectangle **lr) {
  *      The y coordinate of the block which is the center of the cumulus.
  * @param int cumulus_size
  *      Indicates the size of the cumulus. 1 means 1x1 cumulus, 2 means 2x2, etc.
+ * @param int use_mask
+ *      Indicates if the mask is taken into account or not. 1 to use, 0 to not.
  *
  * @return float
  *      The sum of the pr differences (with the reference image) of all the blocks in the cumulus.
  */
-float sum_pr_diffs(int x_center, int y_center, int cumulus_size) {
+float sum_pr_diffs(int x_center, int y_center, int cumulus_size, int use_mask) {
     if ((x_center<0 || y_center<0 || x_center>total_blocks_width || y_center>total_blocks_height)) {
         return 0.0;
     }
@@ -414,7 +435,9 @@ float sum_pr_diffs(int x_center, int y_center, int cumulus_size) {
     for (int x = x_min; x <= x_max; ++x) {
         for (int y = y_min; y <= y_max; ++y) {
             if (!(x<0 || y<0 || x>total_blocks_width-1 || y>total_blocks_height-1)){       // if NOT out of image bounds
-                sum += get_block_movement(x, y);
+                if (!use_mask || (use_mask && mask[y][x])) {
+                    sum += get_block_movement(x, y);
+                }
             }
         }
     }
@@ -443,7 +466,7 @@ float* cumulus_pr_neighbours(int block_x, int block_y, int cumulus_size) {
     for (int i = -1; i <= 1; ++i) {
         for (int j = -1; j <= 1; ++j) {
            ij_index = (j+1) + 3*(i+1);
-           pr_values[ij_index] = sum_pr_diffs(block_x+j, block_y+i, cumulus_size);
+           pr_values[ij_index] = sum_pr_diffs(block_x+j, block_y+i, cumulus_size, 1);
         }
     }
     return pr_values;
@@ -465,7 +488,7 @@ int is_cumulus_seed(int block_x, int block_y) {
     float *pr_values;
     int is_cumulus = NOT_A_CUMULUS;
 
-    if (sum_pr_diffs(block_x, block_y, 1) >= MIN_PR_DIFF_TO_CONSIDER_CUMULUS) {
+    if (sum_pr_diffs(block_x, block_y, 1, 1) >= MIN_PR_DIFF_TO_CONSIDER_CUMULUS) {
         pr_values = cumulus_pr_neighbours(block_x, block_y, 1);
 
         if (!(pr_values[0]==0.0 && pr_values[1]==0.0 && pr_values[2]==0.0 && \
@@ -557,12 +580,14 @@ Rectangle* cumulus_to_rectangle(Cumulus cumulus){
  *      the object.
  *
  * @param Rectangle rect
- *      The rectangle to work with.    
+ *      The rectangle to work with.
+ * @param int use_mask
+ *      Indicates if the mask is taken into account or not. 1 to use, 0 to not.
  *
  * @return int
  *      The number of lines to remove (0 to keep it the same).
  */
-int drop_upper_rows(Rectangle rect) {
+int drop_upper_rows(Rectangle rect, int use_mask) {
     float max_pr_in_the_line;
     int deleted_rows = 0;
     int x1 = rect.x1;
@@ -573,7 +598,7 @@ int drop_upper_rows(Rectangle rect) {
     for (int i = y1; i <= y2; ++i) {
         max_pr_in_the_line = 0.0;
         for (int j = x1; j <=x2; ++j) {
-            max_pr_in_the_line = MAX(max_pr_in_the_line, sum_pr_diffs(j, i, 1));
+            max_pr_in_the_line = MAX(max_pr_in_the_line, sum_pr_diffs(j, i, 1, use_mask));
         }
         if (max_pr_in_the_line < THRESHOLD_KEEP_RECTANGLE_EDGE) {
             deleted_rows++;
@@ -583,7 +608,7 @@ int drop_upper_rows(Rectangle rect) {
     }
     return deleted_rows;
 }
-int drop_lower_rows(Rectangle rect) {
+int drop_lower_rows(Rectangle rect, int use_mask) {
     float max_pr_in_the_line;
     int deleted_rows = 0;
     int x1 = rect.x1;
@@ -594,7 +619,7 @@ int drop_lower_rows(Rectangle rect) {
     for (int i = y2; i >= y1; --i) {
         max_pr_in_the_line = 0.0;
         for (int j = x1; j <= x2; ++j) {
-            max_pr_in_the_line = MAX(max_pr_in_the_line, sum_pr_diffs(j, i, 1));
+            max_pr_in_the_line = MAX(max_pr_in_the_line, sum_pr_diffs(j, i, 1, use_mask));
         }
         if (max_pr_in_the_line < THRESHOLD_KEEP_RECTANGLE_EDGE) {
             deleted_rows++;
@@ -604,7 +629,7 @@ int drop_lower_rows(Rectangle rect) {
     }
     return deleted_rows;
 }
-int drop_left_columns(Rectangle rect) {
+int drop_left_columns(Rectangle rect, int use_mask) {
     float max_pr_in_the_line;
     int deleted_cols = 0;
     int x1 = rect.x1;
@@ -615,7 +640,7 @@ int drop_left_columns(Rectangle rect) {
     for (int j = x1; j <= x2; ++j) {
         max_pr_in_the_line = 0.0;
         for (int i = y1; i <= y2; ++i) {
-            max_pr_in_the_line = MAX(max_pr_in_the_line, sum_pr_diffs(j, i, 1));
+            max_pr_in_the_line = MAX(max_pr_in_the_line, sum_pr_diffs(j, i, 1, use_mask));
         }
         if (max_pr_in_the_line < THRESHOLD_KEEP_RECTANGLE_EDGE) {
             deleted_cols++;
@@ -625,7 +650,7 @@ int drop_left_columns(Rectangle rect) {
     }
     return deleted_cols;
 }
-int drop_right_columns(Rectangle rect) {
+int drop_right_columns(Rectangle rect, int use_mask) {
     float max_pr_in_the_line;
     int deleted_cols = 0;
     int x1 = rect.x1;
@@ -636,7 +661,7 @@ int drop_right_columns(Rectangle rect) {
     for (int j = x2; j >= x1; --j) {
         max_pr_in_the_line = 0.0;
         for (int i = y1; i <= y2; ++i) {
-            max_pr_in_the_line = MAX(max_pr_in_the_line, sum_pr_diffs(j, i, 1));
+            max_pr_in_the_line = MAX(max_pr_in_the_line, sum_pr_diffs(j, i, 1, use_mask));
         }
         if (max_pr_in_the_line < THRESHOLD_KEEP_RECTANGLE_EDGE) {
             deleted_cols++;
@@ -654,10 +679,10 @@ int drop_right_columns(Rectangle rect) {
  *      The rectangle to work with.    
  */
 void reduce_rectangle_size(Rectangle *rect) {
-    (rect->y1) += drop_upper_rows(*rect);
-    (rect->y2) -= drop_lower_rows(*rect);
-    (rect->x1) += drop_left_columns(*rect);
-    (rect->x2) -= drop_right_columns(*rect);
+    (rect->y1) += drop_upper_rows(*rect, 0);
+    (rect->y2) -= drop_lower_rows(*rect, 0);
+    (rect->x1) += drop_left_columns(*rect, 0);
+    (rect->x2) -= drop_right_columns(*rect, 0);
 }
 
 /**
@@ -671,6 +696,7 @@ void reduce_rectangle_size(Rectangle *rect) {
 int find_objects() {
     Rectangle *rect;
     Cumulus cumulus;
+    print_mask();
     if (TRACE_LEVEL>=1) printf("Searching...\n");
     for (int block_y=0; block_y<total_blocks_height; block_y++) {
         for (int block_x=0; block_x<total_blocks_width; block_x++) {
@@ -691,7 +717,7 @@ int find_objects() {
 }
 
 /**
- * Tracks the objects in the previous frame, updating ther position and sizemage.
+ * Tracks the objects in the previous frame, updating their position and size.
  *
  * @return int
  *      Returns 0 if everything was OK, other values if something went wrong. Note: -1 if list is corrupt.
@@ -760,16 +786,16 @@ LinkedRectangle* track_object(LinkedRectangle **lr){
     rect->y2 = y2_enlarged;
 
 
-    upper_rows    = drop_upper_rows(*rect);
+    upper_rows    = drop_upper_rows(*rect, 0);
     rect->y1 += MIN(upper_rows, 2*MAX_RECTANGLE_CHANGE_PER_FRAME);
 
-    lower_rows    = drop_lower_rows(*rect);
+    lower_rows    = drop_lower_rows(*rect, 0);
     rect->y2 -= MIN(lower_rows, 2*MAX_RECTANGLE_CHANGE_PER_FRAME);
 
-    left_columns  = drop_left_columns(*rect);
+    left_columns  = drop_left_columns(*rect, 0);
     rect->x1 += MIN(left_columns, 2*MAX_RECTANGLE_CHANGE_PER_FRAME);
 
-    right_columns = drop_right_columns(*rect);
+    right_columns = drop_right_columns(*rect, 0);
     rect->x2 -= MIN(right_columns, 2*MAX_RECTANGLE_CHANGE_PER_FRAME);
     
     if (TRACE_LEVEL>=0) printf("\n---RECTANGLE---\n");
@@ -1084,9 +1110,9 @@ int main( int argc, char** argv ) {
 
         if (frameNumber > starting_frame) {
             if (is_frame_valid(position)){
+                track_objects();
                 clean_mask();
                 add_rectangles_to_mask();
-                track_objects();
                 find_objects();
             }
             draw_rectangles_in_frame();
