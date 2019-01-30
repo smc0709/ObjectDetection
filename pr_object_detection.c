@@ -45,7 +45,12 @@
 #define INVALID_FRAME 0
 
 #define MAX_RECTANGLE_CHANGE_PER_FRAME 1
-#define MAX_FRAMES_NOT_SEEN_UNTIL_REMOVING_RECTANGLE 10 //5 //15 //120
+#define MAX_FRAMES_NOT_SEEN_UNTIL_REMOVING_RECTANGLE 10 //5 //15 //120      // >= this --> eliminate
+#define MIN_FRAMES_SEEN_TO_MAKE_RECTANGLE_PERSISTENT 5                      // >= this --> persist
+
+#define RECT_STATUS_NOT_PERSISTENT 0
+#define RECT_STATUS_NORMAL 1
+#define RECT_STATUS_DISAPPEARING 2
 
 #define USABLE_BORDER 3     // Number of blocks from the edge inwards of mask with value 1 (where objects are searched)
 
@@ -55,7 +60,7 @@
 #define OUTPUT_COLOURED_FRAME 0     // 1 to output the frame with rectangles, 0 to output black&white blocks
 #define MEASURE_TIME_ELAPSED 0      // 1 to measure, 0 not to measure
 
-#define TRACE_LEVEL 1   // How much information is printed in the console. The higher, the more info is printed
+#define TRACE_LEVEL 0   // How much information is printed in the console. The higher, the more info is printed
                         // -1 shows nothing, 0 shows basic, etc. Accepted values: -1, 0, 1, 2, 3
 
 
@@ -106,7 +111,8 @@ int mode;
 // Simple linked list (with head and tail pointers) for saving the rectangles
 typedef struct linkedrectangle{
     Rectangle *data;
-    int frames_not_seen;
+    int frames_not_seen;        // consecutive frames in which the object has not been re-detected
+    int frames_seen;            // total nomber of frames in which the object has been detected
     struct linkedrectangle *next;
 } LinkedRectangle;
 LinkedRectangle *rect_list_head;
@@ -150,7 +156,7 @@ int drop_lower_rows(Rectangle rect, int use_mask);
 int drop_left_columns(Rectangle rect, int use_mask);
 int drop_right_columns(Rectangle rect, int use_mask);
 
-int drawEdgeOfRectangle(int block_x, int block_y, int whichEdge);
+int drawEdgeOfRectangle(int block_x, int block_y, int whichEdge, int rect_status);
 void draw_rectangles_in_frame();
 
 void update_reference_frame(int position);
@@ -339,6 +345,7 @@ LinkedRectangle* rectangle_list_add(Rectangle **rect) {
     rect_list_tail = lr; // the new rectangle is the last element of the list
     lr->data = *rect;
     lr->frames_not_seen = 0;
+    lr->frames_seen = 1;
     lr->next = NULL;
     num_rects++;
     if (TRACE_LEVEL>=1) printf("Saved rectangle:\tx1=%d\ty1=%d\tx2=%d\ty2=%d\n", (lr->data)->x1, (lr->data)->y1, (lr->data)->x2, (lr->data)->y2);
@@ -696,7 +703,7 @@ void reduce_rectangle_size(Rectangle *rect) {
 int find_objects() {
     Rectangle *rect;
     Cumulus cumulus;
-    print_mask();
+    if (TRACE_LEVEL>=2) print_mask();
     if (TRACE_LEVEL>=1) printf("Searching...\n");
     for (int block_y=0; block_y<total_blocks_height; block_y++) {
         for (int block_x=0; block_x<total_blocks_width; block_x++) {
@@ -756,6 +763,7 @@ LinkedRectangle* track_object(LinkedRectangle **lr){
     Rectangle *rect = (*lr)->data;
     LinkedRectangle *next = (*lr)->next;
     int frames_not_seen = (*lr)->frames_not_seen;
+    int frames_seen = (*lr)->frames_seen;
 
     // Save initial values
     initial_x1 = rect->x1;
@@ -804,24 +812,28 @@ LinkedRectangle* track_object(LinkedRectangle **lr){
     if (TRACE_LEVEL>=1) printf("FINAL    -->\t");
     if (TRACE_LEVEL>=0)               printf("x1=%d\t y1=%d\t x2=%d\t y2=%d\n", rect->x1, rect->y1, rect->x2, rect->y2);
     if (TRACE_LEVEL>=0) printf("frames_not_seen = %d\n", frames_not_seen);
+    if (TRACE_LEVEL>=0) printf("frames_seen = %d\n", frames_seen);
 
-    //if (upper_rows + lower_rows >= 1 + initial_y2 - initial_y1  ||  left_columns + right_columns >= 1 + initial_x2 - initial_x1) {//(*rect).y2 - (*rect).y1 <= 0 || (*rect).x2 - (*rect).x1 <=0) {
-    if (upper_rows + lower_rows >= 1 + y2_enlarged - y1_enlarged  ||  left_columns + right_columns >= 1 + x2_enlarged - x1_enlarged) {//(*rect).y2 - (*rect).y1 <= 0 || (*rect).x2 - (*rect).x1 <=0) {
+    // If the rectange needs to be even smaller, we assume it dissappeared, and keep it the same but modifying a counter and state
+    if (upper_rows + lower_rows >= 1 + y2_enlarged - y1_enlarged  ||  left_columns + right_columns >= 1 + x2_enlarged - x1_enlarged) {
         rect->y1 = initial_y1;
         rect->y2 = initial_y2;
         rect->x1 = initial_x1;
         rect->x2 = initial_x2;
         frames_not_seen++;
-        if (frames_not_seen >= MAX_FRAMES_NOT_SEEN_UNTIL_REMOVING_RECTANGLE) {
+        if (frames_not_seen >= MAX_FRAMES_NOT_SEEN_UNTIL_REMOVING_RECTANGLE \
+            || frames_seen < MIN_FRAMES_SEEN_TO_MAKE_RECTANGLE_PERSISTENT) {
             rectangle_list_remove(lr);
             if (TRACE_LEVEL>=1) printf("Rectangle removed.\n");
             *lr = NULL;
             return next;
         }
     } else{
+        frames_seen++;
         frames_not_seen = 0;
     }
     (*lr)->frames_not_seen = frames_not_seen;
+    (*lr)->frames_seen = frames_seen;
     
     return next;
 }
@@ -835,12 +847,16 @@ LinkedRectangle* track_object(LinkedRectangle **lr){
  * @param int block_y
  *      The y coordinate of the block in which the rectangle edge should be drawn.
  * @param int whichEdge
- *      Indicates which of the edges should be drawn in the block (top, bottom, left or right). Implemented with preprocesor definitions.
+ *      Indicates which of the edges should be drawn in the block (TOP_EDGE, LEFT_EDGE, RIGHT_EDGE, BOTTOM_EDGE)
+ * @param int rect_status
+ *      Indicates the status of the rectangle which side should be drawn. RECT_STATUS_NOT_PERSISTENT, RECT_STATUS_NORMAL,
+ *      RECT_STATUS_DISAPPEARING
  *
  * @return int
  *      If everything is fine returns 0, if there was a problem, -1.
  */
-int drawEdgeOfRectangle(int block_x, int block_y, int whichEdge) {
+int drawEdgeOfRectangle(int block_x, int block_y, int whichEdge, int rect_status) {
+    int y_value, u_value, v_value;
     int xini = block_x*theoretical_block_width;
     int xfin = xini+theoretical_block_width;
     int yini = block_y*theoretical_block_height;
@@ -851,48 +867,65 @@ int drawEdgeOfRectangle(int block_x, int block_y, int whichEdge) {
     if (yfin > height-theoretical_block_height)
         yfin = height;
 
+    if (rect_status == RECT_STATUS_NOT_PERSISTENT) {        // yellow
+        y_value = 255;
+        u_value = 0;
+        v_value = 148;
+    } else if (rect_status == RECT_STATUS_NORMAL) {         // red
+        y_value = 76;
+        u_value = 84;
+        v_value = 255;
+    } else if (rect_status == RECT_STATUS_DISAPPEARING) {   // pink
+        y_value = 135;
+        u_value = 195;
+        v_value = 213;
+    } else{
+        printf("ERROR: incorrect rectangle status.\n");
+        return -1;
+    }
+
     switch (whichEdge) {
         case TOP_EDGE:
             for (int xx = xini; xx < xfin; xx++) {
-                y[yini*width+xx] = 82;
-                y[(yini+1)*width+xx] = 82;
+                y[yini*width+xx] = y_value;
+                y[(yini+1)*width+xx] = y_value;
             }
             for (int xx = xini/2; xx < xfin/2; xx++) {
-                u[yini/2*width+xx] = 90;
-                v[yini/2*width+xx] = 240;
+                u[yini/2*width+xx] = u_value;
+                v[yini/2*width+xx] = v_value;
             }
         break;
 
         case LEFT_EDGE:
             for (int yy = yini; yy < yfin; yy++) {
-                y[yy*width+xini] = 82;
-                y[yy*width+(xini+1)] = 82;
+                y[yy*width+xini] = y_value;
+                y[yy*width+(xini+1)] = y_value;
             }
             for (int yy = yini/2; yy < yfin/2; yy++) {
-                u[yy*width+xini/2] = 90;
-                v[yy*width+xini/2] = 240;
+                u[yy*width+xini/2] = u_value;
+                v[yy*width+xini/2] = v_value;
             }
         break;
 
         case RIGHT_EDGE:
             for (int yy = yini; yy < yfin; yy++) {
-                y[yy*width+(xfin-1)] = 82;
-                y[yy*width+(xfin-2)] = 82;
+                y[yy*width+(xfin-1)] = y_value;
+                y[yy*width+(xfin-2)] = y_value;
             }
             for (int yy = yini/2; yy < yfin/2; yy++) {
-                u[yy*width+(xfin/2-1)] = 90;
-                v[yy*width+(xfin/2-1)] = 240;
+                u[yy*width+(xfin/2-1)] = u_value;
+                v[yy*width+(xfin/2-1)] = v_value;
             }       
         break;
 
         case BOTTOM_EDGE:
             for (int xx = xini; xx < xfin; xx++) {
-                y[(yfin-1)*width+xx] = 82;
-                y[(yfin-2)*width+xx] = 82;
+                y[(yfin-1)*width+xx] = y_value;
+                y[(yfin-2)*width+xx] = y_value;
             }
             for (int xx = xini/2; xx < xfin/2; xx++) {
-                u[(yfin/2-1)*width+xx] = 90;
-                v[(yfin/2-1)*width+xx] = 240;
+                u[(yfin/2-1)*width+xx] = u_value;
+                v[(yfin/2-1)*width+xx] = v_value;
             }
         break;
 
@@ -912,27 +945,35 @@ void draw_rectangles_in_frame() {
     // for each rectangle
     if (rect_list_head==NULL && rect_list_tail==NULL && num_rects==0) return; // all null (list empty)
     else while (p!=NULL){
+        int rect_status;
+        if (p->frames_seen < MIN_FRAMES_SEEN_TO_MAKE_RECTANGLE_PERSISTENT)
+            rect_status = RECT_STATUS_NOT_PERSISTENT;   // Non-confirmed object rectangle (initial)
+        else if (p->frames_not_seen == 0)
+            rect_status = RECT_STATUS_NORMAL;           // Normal rectangle (already considered object)
+        else
+            rect_status = RECT_STATUS_DISAPPEARING;     // Disappearing rectangle (object not seen in last frame(s))
+
         rect = p->data;
         for (int block_y = rect->y1; block_y <= rect->y2; block_y++) {
             for (int block_x = rect->x1; block_x <= rect->x2; block_x++) {
                 // Draw top edges
                 if (block_y==rect->y1){
-                    drawEdgeOfRectangle(block_x, block_y, TOP_EDGE);
+                    drawEdgeOfRectangle(block_x, block_y, TOP_EDGE, rect_status);
                     if (TRACE_LEVEL>=2) printf("TOP_EDGE\tblock_x=%d\tblock_y=%d\n", block_x, block_y);
                 }
                 // Draw left edge
                 if (block_x==rect->x1){
-                    drawEdgeOfRectangle(block_x, block_y, LEFT_EDGE);
+                    drawEdgeOfRectangle(block_x, block_y, LEFT_EDGE, rect_status);
                     if (TRACE_LEVEL>=2) printf("LEFT_EDGE\tblock_x=%d\tblock_y=%d\n", block_x, block_y);
                 }
                 // Draw right edge
                 if (block_x==rect->x2){
-                    drawEdgeOfRectangle(block_x, block_y, RIGHT_EDGE);
+                    drawEdgeOfRectangle(block_x, block_y, RIGHT_EDGE, rect_status);
                     if (TRACE_LEVEL>=2) printf("RIGHT_EDGE\tblock_x=%d\tblock_y=%d\n", block_x, block_y);
                 }
                 // Draw bottom edge
                 if (block_y==rect->y2){
-                    drawEdgeOfRectangle(block_x, block_y, BOTTOM_EDGE);
+                    drawEdgeOfRectangle(block_x, block_y, BOTTOM_EDGE, rect_status);
                     if (TRACE_LEVEL>=2) printf("BOTTOM_EDGE\tblock_x=%d\tblock_y=%d\n", block_x, block_y);
                 }
             }
