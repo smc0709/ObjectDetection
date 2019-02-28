@@ -52,8 +52,8 @@
 #define RECT_STATUS_NORMAL 1
 #define RECT_STATUS_DISAPPEARING 2
 
-#define USABLE_BORDER -1    // Number of blocks from the edge inwards of mask with value 1 (where objects are searched).
-                            // Value -1 makes all the frame available for searching
+#define USABLE_BORDER -1    // Number of blocks from the edge inwards of mask with value NULL (where objects are searched).
+                            // Value -1 makes all the frame available for searching (mask filled with NULLs).
 
 #define MIN(a,b) ((a) < (b) ? (a) : (b))
 #define MAX(a,b) ((a) > (b) ? (a) : (b))
@@ -75,7 +75,7 @@
 #define OUTPUT_COLOURED_FRAME 0     // 1 to output the frame with rectangles, 0 to output black&white blocks
 #define MEASURE_TIME_ELAPSED 0      // 1 to measure, 0 not to measure
 
-#define TRACE_LEVEL 1   // How much information is printed in the console. The higher, the more info is printed
+#define TRACE_LEVEL 2   // How much information is printed in the console. The higher, the more info is printed
                         // -1 shows nothing, 0 shows basic, etc. Accepted values: -1, 0, 1, 2, 3
 
 
@@ -134,9 +134,12 @@ LinkedRectangle *rect_list_head;
 LinkedRectangle *rect_list_tail;
 
 // A mask indicating if the object detector should find rectangles in some blocks or not (rectangles should be able to
-// overlap only when moving, not in finding).
-int **mask;
+// overlap only when moving, not in finding). NULL indicates available for searching otherwise not.
+LinkedRectangle ***mask;
 
+// A fake LinkedRectangle pointer to use in the mask. It does not contain any information, but is allocated in order not
+// to be a NULL pointer and therefore, to be distinguishable from that.
+LinkedRectangle *lr_fake_not_null;
 
 
 ///  FUNCTION PROTOTYPES  ///
@@ -234,25 +237,26 @@ void pr_changes(int image_position_buffer) {
  * Allocates memory for the mask. And calls clean_mask() to initialize the values.
  */
 void init_mask(){
-    mask = malloc(total_blocks_height * sizeof(int *));
+    mask = malloc(total_blocks_height * sizeof(LinkedRectangle **));
     for (int y=0; y < total_blocks_height; ++y) {
-        mask[y] = malloc(total_blocks_width * sizeof(int));
+        mask[y] = malloc(total_blocks_width * sizeof(LinkedRectangle *));
     }
 
     clean_mask();
 }
 
 /**
- * Sets the mask to 1 in the borders (the two outer "blocks" in the frame) and 0 in the rest.
+ * Sets the mask to "NULL" from the borders (USABLE_BORDER blocks) inwards and "lr_fake_not_null" in the rest. If
+ *      USABLE_BORDER is -1, then everithing is filled with NULL
  */
 void clean_mask(){
     for (int y = 0; y < total_blocks_height; ++y) {
         for (int x = 0; x < total_blocks_width; ++x) {
             if (USABLE_BORDER == -1 || y<USABLE_BORDER || y>total_blocks_height-USABLE_BORDER-1 || x<USABLE_BORDER \
                 || x>total_blocks_width-USABLE_BORDER-1)
-                mask[y][x] = 1;
+                mask[y][x] = NULL;
             else
-                mask[y][x] = 0;
+                mask[y][x] = lr_fake_not_null; // Fake rectangle covering that block (so that there is not a search there)
         }
     }
 }
@@ -261,9 +265,16 @@ void clean_mask(){
  * Prints the mask in the console.
  */
 void print_mask() {
+    printf("\nMASK:\n");
     for (int y = 0; y < total_blocks_height; ++y) {
         for (int x = 0; x < total_blocks_width; ++x) {
-            printf("%d  ", mask[y][x]);
+            if (mask[y][x] == NULL) {
+                printf("- ");    // NU --> Null
+            } else if (mask[y][x] == lr_fake_not_null) {
+                printf("F ");    // FR --> Fake Rectangle
+            }  else {
+                printf("R ");    // RR --> Real Rectangle
+            }
         }
         printf("\n");
     }
@@ -304,7 +315,11 @@ void add_rectangle_to_mask(LinkedRectangle **lr){
     for (x = (rect->x1)-1; x <= (rect->x2)+1; ++x) {        // -1 and +1 in the loop due to extra border
         for (y = (rect->y1)-1; y <= (rect->y2)+1; ++y) {    // -1 and +1 in the loop due to extra border
             if (!(x<0 || y<0 || x>total_blocks_width-1 || y>total_blocks_height-1)){
-                mask[y][x] = 0;
+                if (x <= (rect->x2) && x >= (rect->x1) && y <= (rect->y2) && y >= (rect->y1)) {
+                    mask[y][x] = *lr;
+                } else {
+                    mask[y][x] = lr_fake_not_null;
+                }
             }
         }
     }
@@ -453,7 +468,7 @@ float sum_pr_diffs(int x_center, int y_center, int cumulus_size, int use_mask) {
     for (int x = x_min; x <= x_max; ++x) {
         for (int y = y_min; y <= y_max; ++y) {
             if (!(x<0 || y<0 || x>total_blocks_width-1 || y>total_blocks_height-1)){       // if NOT out of image bounds
-                if (!use_mask || (use_mask && mask[y][x])) {
+                if (!use_mask || (use_mask && mask[y][x] == NULL)) {
                     sum += get_block_movement(x, y);
                 }
             }
@@ -1103,6 +1118,7 @@ int main( int argc, char** argv ) {
     char image[100];
     int frame = atoi(frameArg);
     initiated = 0;
+    lr_fake_not_null = malloc(1*sizeof(LinkedRectangle));
 
     int starting_frame;
 
