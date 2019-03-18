@@ -74,8 +74,9 @@
 
 #define OUTPUT_COLOURED_FRAME 0     // 1 to output the frame with rectangles, 0 to output black&white blocks
 #define MEASURE_TIME_ELAPSED 0      // 1 to measure, 0 not to measure
+#define WRITE_CSV 0                 // 1 to write the rectangles in the frame, 0 not to
 
-#define TRACE_LEVEL 2   // How much information is printed in the console. The higher, the more info is printed
+#define TRACE_LEVEL 1   // How much information is printed in the console. The higher, the more info is printed
                         // -1 shows nothing, 0 shows basic, etc. Accepted values: -1, 0, 1, 2, 3
 
 
@@ -176,6 +177,8 @@ void draw_rectangles_in_frame();
 
 void update_reference_frame(int position);
 int is_frame_valid (int position);
+
+int write_csv(int frameNumber, FILE** csv_file_p);
 
 
 
@@ -836,7 +839,7 @@ LinkedRectangle* track_object(LinkedRectangle **lr){
     else
         use_mask = 0;
 
-    compute_mask_for_rect(NULL);
+    compute_mask_for_rect(lr);
      
     // Save initial values
     initial_x1 = rect->x1;
@@ -1131,11 +1134,37 @@ int is_frame_valid (int position){
 }
 
 
+/**
+ * Writes the rectangles of the current frame into the csv.
+ *
+ * @return int
+ *      Returns 0 if everything was OK, other values if something went wrong. Note: -1 if list is corrupt.
+ */
+int write_csv(int frameNumber, FILE** csv_file_p){
+    if (rect_list_head==NULL && rect_list_tail==NULL && num_rects==0) return 0; // all null (list empty)
+    else if (rect_list_head==NULL || rect_list_tail==NULL || num_rects==0) return -1; // at least one null (list corrupt)
+    else{
+        LinkedRectangle *p = rect_list_head;
+        LinkedRectangle *p_before;
+        do {
+            p_before = p;
+            if (RECT_STATUS(p_before) != RECT_STATUS_NOT_PERSISTENT)
+                fprintf(*csv_file_p, "%d;%d;%d;%d;%d\n", frameNumber, p->data->x1, p->data->y1, p->data->x2, p->data->y2);
+                fflush(*csv_file_p);
+            p = p->next;
+            if (p == NULL) return 0;            // si se borra el último de la lista
+        } while (p_before!=rect_list_tail);
+    }
+    return 0;
+}
+
+
 
 ///  MAIN  ///
 int main( int argc, char** argv ) {
     mode = MODE_BASE_IMAGE_INMEDIATE_PREVIOUS_FRAME; //MODE_BASE_IMAGE_INMEDIATE_PREVIOUS_FRAME   MODE_BASE_IMAGE_FIRST_FRAME
     
+    FILE *csv_file;
     struct timespec time_start, time_end;
     uint64_t time_elapsed = 0;
 
@@ -1166,6 +1195,16 @@ int main( int argc, char** argv ) {
         starting_frame = 1;
         buff_size = BUFF_SIZE_OBJECT_DETECTION;
     }
+
+    if (WRITE_CSV) {
+        csv_file = fopen("rectangles.csv", "a");
+        if (csv_file==NULL) {
+            printf("ERROR: csv problem\n");
+            return 0;
+        }
+        fputs("frame;x1;y1;x2;y2\n",csv_file);
+    }
+    
 
     // Loop to process all the frames required
     for (frameNumber = starting_frame; frameNumber < frame; frameNumber++){
@@ -1244,11 +1283,15 @@ int main( int argc, char** argv ) {
         yuv420_rgb24_std(width, height, y, u, v, y_stride, uv_stride, rec_rgb, rgb_stride, YCBCR_601);
         stbi_write_bmp(frameName, width, height, rgb_channels, rec_rgb);
 
+        if (WRITE_CSV) write_csv(frameNumber, &csv_file);
     }
+
     if (MEASURE_TIME_ELAPSED) {
         printf("\n\nThe total time elapsed is: %lf miliseconds approximately.\n", ((double)time_elapsed/1000000));
         printf("The elapsed time per frame is: %lf miliseconds approximately.\n\n", ((double)time_elapsed/1000000)/(double)frame);
     }
+    
+    fclose(csv_file);
     mask_free();
     close_pr_computation();
     rectangles_free();
