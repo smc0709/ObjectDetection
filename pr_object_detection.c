@@ -119,7 +119,6 @@ typedef struct {
 // The number of rectangles
 int num_rects;
 
-
 // The mode used to detect objects (reference frame is always the first o the immediately previous to the current)
 int mode;
 
@@ -127,19 +126,17 @@ int mode;
 typedef struct linkedrectangle{
     Rectangle *data;
     int frames_not_seen;        // consecutive frames in which the object has not been re-detected
-    int frames_seen;            // total nomber of frames in which the object has been detected
+    int frames_seen;            // total number of frames in which the object has been detected
     struct linkedrectangle *next;
 } LinkedRectangle;
 LinkedRectangle *rect_list_head;
 LinkedRectangle *rect_list_tail;
 
 // A mask indicating if the object detector should find rectangles in some blocks or not (rectangles should be able to
-// overlap only when moving, not in finding). NULL indicates available for searching otherwise not.
-LinkedRectangle ***mask;
+// overlap only when moving, not in finding). 0 indicates available for searching otherwise not. 0 --> no rectangle
+// 1 --> border around reactangle, 2 --> rectangle itself
+int **mask;
 
-// A fake LinkedRectangle pointer to use in the mask. It does not contain any information, but is allocated in order not
-// to be a NULL pointer and therefore, to be distinguishable from that.
-LinkedRectangle *lr_fake_not_null;
 
 
 ///  FUNCTION PROTOTYPES  ///
@@ -148,11 +145,11 @@ LinkedRectangle* rectangle_list_add(Rectangle **rect);
 int rectangle_list_remove(LinkedRectangle **lr);
 
 void init_mask();
-void clean_mask();
-void print_mask();
-
-int add_rectangles_to_mask();
+void mask_free();
+void fill_mask_zeros();
+void compute_mask_for_rect(LinkedRectangle **lr);
 void add_rectangle_to_mask(LinkedRectangle **lr);
+void print_mask();
 
 void pr_changes(int image_position_buffer);
 
@@ -234,29 +231,101 @@ void pr_changes(int image_position_buffer) {
 }
 
 /**
- * Allocates memory for the mask. And calls clean_mask() to initialize the values.
+ * Allocates memory for the mask, which dimensions will be total_blocks_height * total_blocks_width. Note: mask not filled.
  */
 void init_mask(){
-    mask = malloc(total_blocks_height * sizeof(LinkedRectangle **));
-    for (int y=0; y < total_blocks_height; ++y) {
-        mask[y] = malloc(total_blocks_width * sizeof(LinkedRectangle *));
-    }
+    mask = (int **)malloc(total_blocks_height * sizeof(int *));
+    if (mask == NULL) return;      // No memory
 
-    clean_mask();
+    for (int y = 0; y < total_blocks_height; ++y){
+        mask[y] = (int *)malloc(total_blocks_width * sizeof(int));
+        if (mask[y] == NULL) {          // No memory
+            for (int i = y-1; i >=0; --i) {
+                free(mask[i]);
+                mask[i] = NULL;
+            }
+            free(mask);
+            mask = NULL;
+        }
+    }
 }
 
 /**
- * Sets the mask to "NULL" from the borders (USABLE_BORDER blocks) inwards and "lr_fake_not_null" in the rest. If
- *      USABLE_BORDER is -1, then everithing is filled with NULL
+ * Frees the memory assigned for the mask and sets it to null.
  */
-void clean_mask(){
+void mask_free(){
+    if (mask==NULL) return;
+    for (int y = 0; y < total_blocks_height; ++y){
+        free(mask[y]);
+        mask[y] = NULL;
+    }
+    free(mask);
+    mask = NULL;
+}
+
+/**
+ * Computes an overall mask taking into account the mask of all the rectangles in the frame but the one for which is
+ *      computed. This way, the mask will show where all the other rectangles are, and therefore make possible to know
+ *      where does it can move, where not, and where would be overlapping if it moves.
+ *
+ * @param LinkedRectangle **lr
+ *      The rectangle which needs not to be taken into account for the mask. If this is NULL, mask uses all rectangles.
+ */
+void compute_mask_for_rect(LinkedRectangle **lr){
+    if (mask==NULL){
+        init_mask();
+        if (mask==NULL) {
+            printf("ERROR: no memory\n");
+            return;
+        }
+    }
+
+    fill_mask_zeros();
+    if (rect_list_head==NULL && rect_list_tail==NULL && num_rects==0) return; // all null (list empty). Filled 0s mask
+    else if (rect_list_head==NULL || rect_list_tail==NULL || num_rects==0) return; // at least one null (list corrupt)
+    else{
+        LinkedRectangle *p = rect_list_head;
+        LinkedRectangle *p_before=NULL;
+        do {
+            if (lr==NULL || p!=*lr) add_rectangle_to_mask(&p);
+            p_before = p;
+            p = p->next;
+        } while (p_before!=rect_list_tail);
+    }
+}
+
+/**
+ * Fills the rectangle mask with zeros everywhere, so that it cleans the memory zone.
+ */
+
+void fill_mask_zeros(){
+
     for (int y = 0; y < total_blocks_height; ++y) {
         for (int x = 0; x < total_blocks_width; ++x) {
-            if (USABLE_BORDER == -1 || y<USABLE_BORDER || y>total_blocks_height-USABLE_BORDER-1 || x<USABLE_BORDER \
-                || x>total_blocks_width-USABLE_BORDER-1)
-                mask[y][x] = NULL;
-            else
-                mask[y][x] = lr_fake_not_null; // Fake rectangle covering that block (so that there is not a search there)
+            mask[y][x] = 0;
+        }
+    }
+}
+
+
+/**
+ * Adds the area occupied by the rectangle to the mask, so that next rectangles found are not overlapping with it.
+ *
+ * @param LinkedRectangle **lr
+ *      The rectangle to add to the mask.
+ */
+void add_rectangle_to_mask(LinkedRectangle **lr){
+    Rectangle *rect = (*lr)->data;
+
+    for (int x = (rect->x1)-1; x <= (rect->x2)+1; ++x) {        // -1 and +1 in the loop due to extra border
+        for (int y = (rect->y1)-1; y <= (rect->y2)+1; ++y) {    // -1 and +1 in the loop due to extra border
+            if (!(x<0 || y<0 || x>total_blocks_width-1 || y>total_blocks_height-1)){
+                if (x <= (rect->x2) && x >= (rect->x1) && y <= (rect->y2) && y >= (rect->y1)) {
+                    mask[y][x] = 2;
+                } else if (mask[y][x]==0) {
+                    mask[y][x] = 1;
+                }
+            }
         }
     }
 }
@@ -268,61 +337,17 @@ void print_mask() {
     printf("\nMASK:\n");
     for (int y = 0; y < total_blocks_height; ++y) {
         for (int x = 0; x < total_blocks_width; ++x) {
-            if (mask[y][x] == NULL) {
-                printf("- ");    // NU --> Null
-            } else if (mask[y][x] == lr_fake_not_null) {
-                printf("F ");    // FR --> Fake Rectangle
-            }  else {
-                printf("R ");    // RR --> Real Rectangle
+            if (mask[y][x] == 0) {
+                printf("- ");
+            } else if (mask[y][x] == 1) {
+                printf("1 ");
+            } else {
+                printf("2 ");
             }
         }
         printf("\n");
     }
     printf("\n");
-}
-
-/**
- * Adds the areas occupied by the stored rectangles to the mask, so that next rectangles found are not overlapping with
- * current ones.
- *
- * @return int
- *      Returns 0 if everything was OK, other values if something went wrong. Note: -1 if list is corrupt.
- */
-int add_rectangles_to_mask(){
-    if (rect_list_head==NULL && rect_list_tail==NULL && num_rects==0) return 0; // all null (list empty)
-    else if (rect_list_head==NULL || rect_list_tail==NULL || num_rects==0) return -1; // at least one null (list corrupt)
-    else{
-        LinkedRectangle *p = rect_list_head;
-        LinkedRectangle *p_before;
-        do {
-            add_rectangle_to_mask(&p);
-            p_before = p;
-            p = p->next;
-        } while (p_before!=rect_list_tail);
-    }
-    return 0;
-}
-
-/**
- * Adds the area occupied by the rectangle to the mask, so that next rectangles found are not overlapping with it.
- *
- * @param **LinkedRectangle
- */
-void add_rectangle_to_mask(LinkedRectangle **lr){
-    int x, y;
-    Rectangle *rect = (*lr)->data;
-
-    for (x = (rect->x1)-1; x <= (rect->x2)+1; ++x) {        // -1 and +1 in the loop due to extra border
-        for (y = (rect->y1)-1; y <= (rect->y2)+1; ++y) {    // -1 and +1 in the loop due to extra border
-            if (!(x<0 || y<0 || x>total_blocks_width-1 || y>total_blocks_height-1)){
-                if (x <= (rect->x2) && x >= (rect->x1) && y <= (rect->y2) && y >= (rect->y1)) {
-                    mask[y][x] = *lr;
-                } else {
-                    mask[y][x] = lr_fake_not_null;
-                }
-            }
-        }
-    }
 }
 
 /**
@@ -359,13 +384,14 @@ LinkedRectangle* rectangle_list_add(Rectangle **rect) {
         (*rect) = NULL;
         return NULL;
     }
-
+    
     LinkedRectangle *lr = (LinkedRectangle *)malloc(sizeof(LinkedRectangle));
     if (lr==NULL) {                                                             // no memory
         free(*rect);
         (*rect) = NULL;
         return NULL;
     }
+
     if (rect_list_head==NULL && rect_list_tail==NULL && num_rects==0)           // all null (list empty)
         rect_list_head = lr; // the new rectangle is the first element of the list
     else if (rect_list_head==NULL || rect_list_tail==NULL || num_rects==0)      // one null but the other(s) not
@@ -379,6 +405,7 @@ LinkedRectangle* rectangle_list_add(Rectangle **rect) {
     lr->frames_seen = 1;
     lr->next = NULL;
     num_rects++;
+
     if (TRACE_LEVEL>=1) printf("Saved rectangle:\tx1=%d\ty1=%d\tx2=%d\ty2=%d\n", (lr->data)->x1, (lr->data)->y1, (lr->data)->x2, (lr->data)->y2);
     return lr;
 }
@@ -404,12 +431,7 @@ int rectangle_list_remove(LinkedRectangle **lr) {
         }else{                                          // is only head
             rect_list_head = rect_list_head->next;
         }
-        free((*lr)->data);
-        (*lr)->data = NULL;
-        free(*lr);
-        *lr = NULL;
-        num_rects--;
-        return 0;
+        goto FREES;
     }
 
     LinkedRectangle *p = rect_list_head;
@@ -423,15 +445,19 @@ int rectangle_list_remove(LinkedRectangle **lr) {
             }else {                                     // is typical node
                 p_before->next = p->next;
             }
-            free((*lr)->data);
-            (*lr)->data = NULL;
-            free(*lr);
-            *lr = NULL;
-            num_rects--;
-            return 0;
+            goto FREES;
         }
         p_before=p;
     }
+    return 1;   // rectangle not removed (not in the list!!)
+
+    FREES:
+    free((*lr)->data);
+    (*lr)->data = NULL;
+    free(*lr);
+    *lr = NULL;
+    num_rects--;
+    return 0;
 }
 
 /**
@@ -468,8 +494,10 @@ float sum_pr_diffs(int x_center, int y_center, int cumulus_size, int use_mask) {
     for (int x = x_min; x <= x_max; ++x) {
         for (int y = y_min; y <= y_max; ++y) {
             if (!(x<0 || y<0 || x>total_blocks_width-1 || y>total_blocks_height-1)){       // if NOT out of image bounds
-                if (!use_mask || (use_mask && mask[y][x] == NULL)) {
+                if (!use_mask || (use_mask && mask[y][x] == 0)) {
                     sum += get_block_movement(x, y);
+                } else{
+                    return 0.0;     // no sum is done when overlapping. A value of 0.0 is returned
                 }
             }
         }
@@ -726,11 +754,13 @@ void reduce_rectangle_size(Rectangle *rect) {
  *      rectangle that encloses the object and saves it.
  *
  * @return int
- *      Irrelevant/not used.
+ *      0 if everything went fine. 1 if the maximum number of rectangles was reached.
  */
 int find_objects() {
     Rectangle *rect;
     Cumulus cumulus;
+    LinkedRectangle *lr;
+    compute_mask_for_rect(NULL);
     if (TRACE_LEVEL>=2) print_mask();
     if (TRACE_LEVEL>=1) printf("\nSearching...\n");
     for (int block_y=0; block_y<total_blocks_height; block_y++) {
@@ -744,12 +774,18 @@ int find_objects() {
                 rect = cumulus_to_rectangle(cumulus);
                 reduce_rectangle_size(rect);
 
-                rectangle_list_add(&rect);
-                if (num_rects >= MAX_NUM_RECTANGLES)
-                    return 0;
+                lr = rectangle_list_add(&rect);
+                compute_mask_for_rect(NULL);
+
+                if (num_rects >= MAX_NUM_RECTANGLES){
+                    if (TRACE_LEVEL>=1) printf("Maximum number of rectangles reached\n");
+                    return 1;
+                }
             }
         }
     }
+    if (TRACE_LEVEL>=2) print_mask();
+    return 0;
 }
 
 /**
@@ -799,7 +835,8 @@ LinkedRectangle* track_object(LinkedRectangle **lr){
         use_mask = 1;
     else
         use_mask = 0;
-    
+
+    compute_mask_for_rect(NULL);
      
     // Save initial values
     initial_x1 = rect->x1;
@@ -875,7 +912,6 @@ LinkedRectangle* track_object(LinkedRectangle **lr){
     }
     (*lr)->frames_not_seen = frames_not_seen;
     (*lr)->frames_seen = frames_seen;
-    add_rectangle_to_mask(lr);
 
     return next;
 }
@@ -1001,22 +1037,22 @@ void draw_rectangles_in_frame() {
                 // Draw top edges
                 if (block_y==rect->y1){
                     drawEdgeOfRectangle(block_x, block_y, TOP_EDGE, rect_status);
-                    if (TRACE_LEVEL>=2) printf("TOP_EDGE\tblock_x=%d\tblock_y=%d\n", block_x, block_y);
+                    if (TRACE_LEVEL>=3) printf("TOP_EDGE\tblock_x=%d\tblock_y=%d\n", block_x, block_y);
                 }
                 // Draw left edge
                 if (block_x==rect->x1){
                     drawEdgeOfRectangle(block_x, block_y, LEFT_EDGE, rect_status);
-                    if (TRACE_LEVEL>=2) printf("LEFT_EDGE\tblock_x=%d\tblock_y=%d\n", block_x, block_y);
+                    if (TRACE_LEVEL>=3) printf("LEFT_EDGE\tblock_x=%d\tblock_y=%d\n", block_x, block_y);
                 }
                 // Draw right edge
                 if (block_x==rect->x2){
                     drawEdgeOfRectangle(block_x, block_y, RIGHT_EDGE, rect_status);
-                    if (TRACE_LEVEL>=2) printf("RIGHT_EDGE\tblock_x=%d\tblock_y=%d\n", block_x, block_y);
+                    if (TRACE_LEVEL>=3) printf("RIGHT_EDGE\tblock_x=%d\tblock_y=%d\n", block_x, block_y);
                 }
                 // Draw bottom edge
                 if (block_y==rect->y2){
                     drawEdgeOfRectangle(block_x, block_y, BOTTOM_EDGE, rect_status);
-                    if (TRACE_LEVEL>=2) printf("BOTTOM_EDGE\tblock_x=%d\tblock_y=%d\n", block_x, block_y);
+                    if (TRACE_LEVEL>=3) printf("BOTTOM_EDGE\tblock_x=%d\tblock_y=%d\n", block_x, block_y);
                 }
             }
         }
@@ -1100,10 +1136,8 @@ int is_frame_valid (int position){
 int main( int argc, char** argv ) {
     mode = MODE_BASE_IMAGE_INMEDIATE_PREVIOUS_FRAME; //MODE_BASE_IMAGE_INMEDIATE_PREVIOUS_FRAME   MODE_BASE_IMAGE_FIRST_FRAME
     
-    //if (MEASURE_TIME_ELAPSED){
-        struct timespec time_start, time_end;
-        uint64_t time_elapsed = 0;
-    //}
+    struct timespec time_start, time_end;
+    uint64_t time_elapsed = 0;
 
     if (TRACE_LEVEL>=0) printf("\n\
          ___________________________________________________________________________ \n\
@@ -1118,7 +1152,7 @@ int main( int argc, char** argv ) {
     char image[100];
     int frame = atoi(frameArg);
     initiated = 0;
-    lr_fake_not_null = malloc(1*sizeof(LinkedRectangle));
+    mask=NULL;
 
     int starting_frame;
 
@@ -1159,7 +1193,6 @@ int main( int argc, char** argv ) {
         if (TRACE_LEVEL>=3) printf("width = %d, height = %d, rgb_channels = %d\n", width, height, rgb_channels);
         if (initiated == 0) {
             init_pr_computation(width, height, rgb_channels);
-            init_mask();
             initiated = 1;
         }
         
@@ -1194,7 +1227,6 @@ int main( int argc, char** argv ) {
 
         if (frameNumber > starting_frame) {
             if (is_frame_valid(position)){
-                clean_mask();
                 track_objects();
                 find_objects();
             }
@@ -1217,6 +1249,7 @@ int main( int argc, char** argv ) {
         printf("\n\nThe total time elapsed is: %lf miliseconds approximately.\n", ((double)time_elapsed/1000000));
         printf("The elapsed time per frame is: %lf miliseconds approximately.\n\n", ((double)time_elapsed/1000000)/(double)frame);
     }
+    mask_free();
     close_pr_computation();
     rectangles_free();
 
