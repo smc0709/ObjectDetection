@@ -72,11 +72,12 @@
         )\
     )
 
-#define OUTPUT_COLOURED_FRAME 0     // 1 to output the frame with rectangles, 0 to output black&white blocks
-#define MEASURE_TIME_ELAPSED 0      // 1 to measure, 0 not to measure
-#define WRITE_CSV 0                 // 1 to write the rectangles in the frame, 0 not to
+#define OUTPUT_COLOURED_FRAME 0             // 1 to output the frame with rectangles, 0 to output black&white blocks
+#define MEASURE_TIME_ELAPSED 1              // 1 to measure, 0 not to measure
+#define WRITE_CSV 1                         // 1 to write the rectangles in the frame, 0 not to
+#define DO_NOT_WRITE_IMAGES_JUST_COMPUTE 1  // 1 to do only computing, 0 to actually write output image files
 
-#define TRACE_LEVEL 1   // How much information is printed in the console. The higher, the more info is printed
+#define TRACE_LEVEL -1   // How much information is printed in the console. The higher, the more info is printed
                         // -1 shows nothing, 0 shows basic, etc. Accepted values: -1, 0, 1, 2, 3
 
 
@@ -894,7 +895,7 @@ LinkedRectangle* track_object(LinkedRectangle **lr){
     // counter until some grace frames confirm that the object dissapeared or stopped moving. Also if the rectangle is not
     // persistent and needs to decrease (vertically or horizontally) more than twice the MAX_RECTANGLE_CHANGE_PER_FRAME, it
     // is removed.
-    printf("upper_rows=%d, lower_rows=%d, left_columns=%d, right_columns=%d\n", upper_rows, lower_rows, left_columns, right_columns);
+    if (TRACE_LEVEL>=2) printf("upper_rows=%d, lower_rows=%d, left_columns=%d, right_columns=%d\n", upper_rows, lower_rows, left_columns, right_columns);
     if (upper_rows + lower_rows >= 1 + y2_enlarged - y1_enlarged  ||  left_columns + right_columns >= 1 + x2_enlarged - x1_enlarged \
         ||  (use_mask==1 && (upper_rows + lower_rows > 2*2*MAX_RECTANGLE_CHANGE_PER_FRAME || left_columns + right_columns > 2*2*MAX_RECTANGLE_CHANGE_PER_FRAME))) {
         rect->y1 = initial_y1;
@@ -1146,11 +1147,17 @@ int write_csv(int frameNumber, FILE** csv_file_p){
     else{
         LinkedRectangle *p = rect_list_head;
         LinkedRectangle *p_before;
+        int x1, y1, x2, y2;
         do {
             p_before = p;
-            if (RECT_STATUS(p_before) != RECT_STATUS_NOT_PERSISTENT)
-                fprintf(*csv_file_p, "%d;%d;%d;%d;%d\n", frameNumber, p->data->x1, p->data->y1, p->data->x2, p->data->y2);
-                fflush(*csv_file_p);
+            if (RECT_STATUS(p_before) != RECT_STATUS_NOT_PERSISTENT) {
+                x1 = (width/total_blocks_width) * (p->data->x1);            if (x1 > width) x1 = width;
+                y1 = (height/total_blocks_height) * (p->data->y1);          if (y1 > height) y1 = height;
+                x2 = (width/total_blocks_width) * (1+(p->data->x2)) - 1;    if (x2 > width) x2 = width;
+                y2 = (height/total_blocks_height) * (1+(p->data->y2)) - 1;  if (y2 > height) y2 = height;
+                fprintf(*csv_file_p, "%d;%d;%d;%d;%d\n", frameNumber, x1, y1, x2, y2);
+                //fflush(*csv_file_p);
+            }
             p = p->next;
             if (p == NULL) return 0;            // si se borra el último de la lista
         } while (p_before!=rect_list_tail);
@@ -1197,7 +1204,7 @@ int main( int argc, char** argv ) {
     }
 
     if (WRITE_CSV) {
-        csv_file = fopen("rectangles.csv", "a");
+        csv_file = fopen("rectangles.csv", "w");
         if (csv_file==NULL) {
             printf("ERROR: csv problem\n");
             return 0;
@@ -1269,7 +1276,7 @@ int main( int argc, char** argv ) {
                 track_objects();
                 find_objects();
             }
-            draw_rectangles_in_frame();
+            if (!DO_NOT_WRITE_IMAGES_JUST_COMPUTE) draw_rectangles_in_frame();
         }
 
         if (MEASURE_TIME_ELAPSED){
@@ -1277,11 +1284,13 @@ int main( int argc, char** argv ) {
             time_elapsed += ((time_end.tv_sec * 1000000000) + time_end.tv_nsec) - ((time_start.tv_sec * 1000000000) + time_start.tv_nsec);
         }
 
-        char frameName[100];
-        sprintf(frameName,"./output/output%i.bmp",frameNumber);
-        if (TRACE_LEVEL>=1) printf("Output: %s\n", frameName);
-        yuv420_rgb24_std(width, height, y, u, v, y_stride, uv_stride, rec_rgb, rgb_stride, YCBCR_601);
-        stbi_write_bmp(frameName, width, height, rgb_channels, rec_rgb);
+        if (!DO_NOT_WRITE_IMAGES_JUST_COMPUTE) {
+            char frameName[100];
+            sprintf(frameName,"./output/output%i.bmp",frameNumber);
+            if (TRACE_LEVEL>=1) printf("Output: %s\n", frameName);
+            yuv420_rgb24_std(width, height, y, u, v, y_stride, uv_stride, rec_rgb, rgb_stride, YCBCR_601);
+            stbi_write_bmp(frameName, width, height, rgb_channels, rec_rgb);
+        }
 
         if (WRITE_CSV) write_csv(frameNumber, &csv_file);
     }
@@ -1290,7 +1299,7 @@ int main( int argc, char** argv ) {
         printf("\n\nThe total time elapsed is: %lf miliseconds approximately.\n", ((double)time_elapsed/1000000));
         printf("The elapsed time per frame is: %lf miliseconds approximately.\n\n", ((double)time_elapsed/1000000)/(double)frame);
     }
-    
+
     fclose(csv_file);
     mask_free();
     close_pr_computation();
