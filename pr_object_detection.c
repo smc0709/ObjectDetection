@@ -39,14 +39,14 @@
 #define MODE_BASE_IMAGE_INMEDIATE_PREVIOUS_FRAME 2
 
 #define MAX_MOV_VALID_FRAME_MODE_FIRST_FRAME 0.065
-#define MAX_MOV_VALID_FRAME_MODE_PREV_FRAME 0.035
+#define MAX_MOV_VALID_FRAME_MODE_PREV_FRAME 0.02       //0.025 //0.035
 #define MOV_INCR_PER_FRAME 0.01
 #define VALID_FRAME 1
 #define INVALID_FRAME 0
 
 #define MAX_RECTANGLE_CHANGE_PER_FRAME 1
 #define MAX_FRAMES_NOT_SEEN_UNTIL_REMOVING_RECTANGLE 10 //5 //15 //120      // >= this --> eliminate
-#define MIN_FRAMES_SEEN_TO_MAKE_RECTANGLE_PERSISTENT 3 //5                  // >= this --> persist
+#define MIN_FRAMES_SEEN_TO_MAKE_RECTANGLE_PERSISTENT 5  //3 //4 //5         // >= this --> persist
 
 #define RECT_STATUS_NOT_PERSISTENT 0
 #define RECT_STATUS_NORMAL 1
@@ -72,12 +72,12 @@
         )\
     )
 
-#define OUTPUT_COLOURED_FRAME 0             // 1 to output the frame with rectangles, 0 to output black&white blocks
-#define MEASURE_TIME_ELAPSED 1              // 1 to measure, 0 not to measure
-#define WRITE_CSV 1                         // 1 to write the rectangles in the frame, 0 not to
-#define DO_NOT_WRITE_IMAGES_JUST_COMPUTE 1  // 1 to do only computing, 0 to actually write output image files
+#define OUTPUT_COLOURED_FRAME 0             // 1 to output original frame with rectangles, 0 to output black&white blocks
+#define MEASURE_TIME_ELAPSED 0              // 1 to measure, 0 not to measure
+#define WRITE_CSV 0                         // 1 to write the rectangles in the frame, 0 not to
+#define DO_NOT_WRITE_IMAGES_JUST_COMPUTE 0  // 1 to do only computing, 0 to actually write output image files
 
-#define TRACE_LEVEL -1   // How much information is printed in the console. The higher, the more info is printed
+#define TRACE_LEVEL 1   // How much information is printed in the console. The higher, the more info is printed
                         // -1 shows nothing, 0 shows basic, etc. Accepted values: -1, 0, 1, 2, 3
 
 
@@ -129,6 +129,8 @@ typedef struct linkedrectangle{
     Rectangle *data;
     int frames_not_seen;        // consecutive frames in which the object has not been re-detected
     int frames_seen;            // total number of frames in which the object has been detected
+    int prev_x_size;            // x side size before the overlapping. If no overlapping, the size in the previous frame
+    int prev_y_size;            // y side size before the overlapping. If no overlapping, the size in the previous frame
     struct linkedrectangle *next;
 } LinkedRectangle;
 LinkedRectangle *rect_list_head;
@@ -408,6 +410,8 @@ LinkedRectangle* rectangle_list_add(Rectangle **rect) {
     lr->frames_not_seen = 0;
     lr->frames_seen = 1;
     lr->next = NULL;
+    lr->prev_x_size = 1+((*rect)->x2)-((*rect)->x1);
+    lr->prev_y_size = 1+((*rect)->y2)-((*rect)->y1);
     num_rects++;
 
     if (TRACE_LEVEL>=1) printf("Saved rectangle:\tx1=%d\ty1=%d\tx2=%d\ty2=%d\n", (lr->data)->x1, (lr->data)->y1, (lr->data)->x2, (lr->data)->y2);
@@ -779,7 +783,7 @@ int find_objects() {
                 reduce_rectangle_size(rect);
 
                 lr = rectangle_list_add(&rect);
-                compute_mask_for_rect(NULL);
+                compute_mask_for_rect(NULL);        // next recteangle found does not overlap with any
 
                 if (num_rects >= MAX_NUM_RECTANGLES){
                     if (TRACE_LEVEL>=1) printf("Maximum number of rectangles reached\n");
@@ -827,6 +831,7 @@ LinkedRectangle* track_object(LinkedRectangle **lr){
     int upper_rows, lower_rows, left_columns, right_columns;
     int x1_enlarged, x2_enlarged, y1_enlarged, y2_enlarged, x1_enlargement, x2_enlargement, y1_enlargement, y2_enlargement;
     int use_mask;
+    int overlapped;
 
     if ((*lr)==NULL) return NULL;
 
@@ -847,6 +852,19 @@ LinkedRectangle* track_object(LinkedRectangle **lr){
     initial_x2 = rect->x2;
     initial_y1 = rect->y1;
     initial_y2 = rect->y2;
+
+    overlapped = 0;
+    if (use_mask==0){
+        for (int y = initial_y1; y < 1+initial_y2; ++y) {
+            for (int x = initial_x1; x < 1+initial_x2; ++x) {
+                if (mask[y][x] == 2) {
+                    overlapped = 1;
+                    break;
+                }
+            }
+            if (overlapped != 0) break;
+        }
+    }
 
     // Enlage rectangle
     //rect->x1 = MAX(rect->x1 - MAX_RECTANGLE_CHANGE_PER_FRAME, 0);
@@ -890,6 +908,9 @@ LinkedRectangle* track_object(LinkedRectangle **lr){
     if (TRACE_LEVEL>=0)               printf("x1=%d\t y1=%d\t x2=%d\t y2=%d\n", rect->x1, rect->y1, rect->x2, rect->y2);
     if (TRACE_LEVEL>=0) printf("frames_not_seen = %d\n", frames_not_seen);
     if (TRACE_LEVEL>=0) printf("frames_seen = %d\n", frames_seen);
+    if (TRACE_LEVEL>=1) printf("prev_y_size = %d\n", (*lr)->prev_y_size);
+    if (TRACE_LEVEL>=1) printf("prev_x_size = %d\n", (*lr)->prev_x_size);
+    if (TRACE_LEVEL>=1 && overlapped) printf("Rectangle overlapped.\n");
 
     // If the rectange needs to be smaller than Nx1 or 1xN, we assume it dissappeared, and keep it the same but modifying a
     // counter until some grace frames confirm that the object dissapeared or stopped moving. Also if the rectangle is not
@@ -910,10 +931,27 @@ LinkedRectangle* track_object(LinkedRectangle **lr){
             *lr = NULL;
             return next;
         }
-    } else{
+    } else {
         frames_seen++;
         frames_not_seen = 0;
     }
+
+    if (overlapped != 0){      // If there is overlapping and the rectangle is bigger than the saved size, it is reduced
+        while (1+(rect->y2)-(rect->y1) > (*lr)->prev_y_size) {
+            (rect->y1)++;
+            if (1+(rect->y2)-(rect->y1) > (*lr)->prev_y_size)
+                (rect->y2)--;
+        }
+        while (1+(rect->x2)-(rect->x1) > (*lr)->prev_x_size) {
+            (rect->x1)++;
+            if (1+(rect->x2)-(rect->x1) > (*lr)->prev_x_size)
+                (rect->x2)--;
+        }
+    } else {                    // If there is no overlapping, the x and y side sizes are saved
+        (*lr)->prev_y_size = 1+(rect->y2)-(rect->y1);
+        (*lr)->prev_x_size = 1+(rect->x2)-(rect->x1);
+    }
+
     (*lr)->frames_not_seen = frames_not_seen;
     (*lr)->frames_seen = frames_seen;
 
