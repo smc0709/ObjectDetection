@@ -52,9 +52,6 @@
 #define RECT_STATUS_NORMAL 1
 #define RECT_STATUS_DISAPPEARING 2
 
-#define USABLE_BORDER -1    // Number of blocks from the edge inwards of mask with value NULL (where objects are searched).
-                            // Value -1 makes all the frame available for searching (mask filled with NULLs).
-
 #define MIN(a,b) ((a) < (b) ? (a) : (b))
 #define MAX(a,b) ((a) > (b) ? (a) : (b))
 
@@ -77,7 +74,7 @@
 #define WRITE_CSV 0                         // 1 to write the rectangles in the frame, 0 not to
 #define DO_NOT_WRITE_IMAGES_JUST_COMPUTE 0  // 1 to do only computing, 0 to actually write output image files
 
-#define TRACE_LEVEL 1   // How much information is printed in the console. The higher, the more info is printed
+#define TRACE_LEVEL 0   // How much information is printed in the console. The higher, the more info is printed
                         // -1 shows nothing, 0 shows basic, etc. Accepted values: -1, 0, 1, 2, 3
 
 
@@ -127,6 +124,7 @@ int mode;
 // Simple linked list (with head and tail pointers) for saving the rectangles
 typedef struct linkedrectangle{
     Rectangle *data;
+    unsigned long id;           // unique id of the rectangle
     int frames_not_seen;        // consecutive frames in which the object has not been re-detected
     int frames_seen;            // total number of frames in which the object has been detected
     int prev_x_size;            // x side size before the overlapping. If no overlapping, the size in the previous frame
@@ -385,6 +383,8 @@ void rectangles_free() {
  *      The rectangle node created.
  */
 LinkedRectangle* rectangle_list_add(Rectangle **rect) {
+    static unsigned long rect_id = 0;
+
     if (num_rects>=MAX_NUM_RECTANGLES){                                         // list is full
         free(*rect);
         (*rect) = NULL;
@@ -412,6 +412,8 @@ LinkedRectangle* rectangle_list_add(Rectangle **rect) {
     lr->next = NULL;
     lr->prev_x_size = 1+((*rect)->x2)-((*rect)->x1);
     lr->prev_y_size = 1+((*rect)->y2)-((*rect)->y1);
+    lr->id = rect_id;
+    rect_id++;
     num_rects++;
 
     if (TRACE_LEVEL>=1) printf("Saved rectangle:\tx1=%d\ty1=%d\tx2=%d\ty2=%d\n", (lr->data)->x1, (lr->data)->y1, (lr->data)->x2, (lr->data)->y2);
@@ -609,15 +611,6 @@ Cumulus get_cumulus_centered(int block_x, int block_y) {
         } while (index_new_center!=4);
         cumulus.cumulus_size = cumulus_size;
     }
-    // Do not let the cumulus to be out of frame. Move it inside
-    while (X1_CORNER_FROM_CUMULUS(cumulus.x_center, cumulus_size) < 0)                      // (x1 < 0)
-        cumulus.x_center++;
-    while (Y1_CORNER_FROM_CUMULUS(cumulus.y_center, cumulus_size) < 0)                      // (y1 < 0)
-        cumulus.y_center++;
-    while (X2_CORNER_FROM_CUMULUS(cumulus.x_center, cumulus_size) > total_blocks_width)     // (x2 > width)
-        cumulus.x_center--;
-    while (Y2_CORNER_FROM_CUMULUS(cumulus.y_center, cumulus_size) > total_blocks_height)    // (y2 > height)
-        cumulus.y_center--;
     return cumulus;
 }
 
@@ -636,11 +629,79 @@ Rectangle* cumulus_to_rectangle(Cumulus cumulus){
         printf("ERROR: no memory\n");
         return NULL;
     }
+    int overlap_in_the_line;
 
-    rect->x1 = X1_CORNER_FROM_CUMULUS(cumulus.x_center, cumulus.cumulus_size);
-    rect->y1 = Y1_CORNER_FROM_CUMULUS(cumulus.y_center, cumulus.cumulus_size);
-    rect->x2 = X2_CORNER_FROM_CUMULUS(cumulus.x_center, cumulus.cumulus_size);
-    rect->y2 = Y2_CORNER_FROM_CUMULUS(cumulus.y_center, cumulus.cumulus_size);
+    rect->x1 = MAX(MIN(X1_CORNER_FROM_CUMULUS(cumulus.x_center, cumulus.cumulus_size), total_blocks_width-1), 0);
+    rect->y1 = MAX(MIN(Y1_CORNER_FROM_CUMULUS(cumulus.y_center, cumulus.cumulus_size), total_blocks_height-1), 0);
+    rect->x2 = MAX(MIN(X2_CORNER_FROM_CUMULUS(cumulus.x_center, cumulus.cumulus_size), total_blocks_width-1), 0);
+    rect->y2 = MAX(MIN(Y2_CORNER_FROM_CUMULUS(cumulus.y_center, cumulus.cumulus_size), total_blocks_height-1), 0);
+
+    // Eliminate upper lines overlapping with rectangles
+    for (int i = rect->y1; i <= rect->y2; ++i) {
+        overlap_in_the_line = 0;
+        for (int j = rect->x1; j <=rect->x2; ++j) {
+            if (mask[i][j] != 0) {
+                rect->y1 += 1;
+                overlap_in_the_line = 1;
+                break;
+            }
+        }
+        if (!overlap_in_the_line) {
+            break;
+        }
+    }
+
+    // Eliminate lower lines overlapping with rectangles
+    for (int i = rect->y2; i >= rect->y1; --i) {
+        overlap_in_the_line = 0;
+        for (int j = rect->x1; j <= rect->x2; ++j) {
+            if (mask[i][j] != 0) {
+                rect->y2 -= 1;
+                overlap_in_the_line = 1;
+                break;
+            }
+        }
+        if (!overlap_in_the_line) {
+            break;
+        }
+    }
+
+    // Eliminate left side lines overlapping with rectangles
+    for (int j = rect->x1; j <= rect->x2; ++j) {
+        overlap_in_the_line = 0;
+        for (int i = rect->y1; i <= rect->y2; ++i) {
+            if (mask[i][j] != 0) {
+                rect->x1 += 1;
+                overlap_in_the_line = 1;
+                break;
+            }
+        }
+        if (!overlap_in_the_line) {
+            break;
+        }
+    }
+
+    // Eliminate right side lines overlapping with rectangles
+    for (int j = rect->x2; j >= rect->x1; --j) {
+        overlap_in_the_line = 0;
+        for (int i = rect->y1; i <= rect->y2; ++i) {
+            if (mask[i][j] != 0) {
+                rect->x2 -= 1;
+                overlap_in_the_line = 1;
+                break;
+            }
+        }
+        if (!overlap_in_the_line) {
+            break;
+        }
+    }
+
+    // If the rectangle does not have any area, then it is discarded
+    if ((rect->x2)-(rect->x1)<1 || (rect->y2)-(rect->y1)<1) {
+        free(rect);
+        rect = NULL;
+        if (TRACE_LEVEL>=1) printf("Cumulus discarded.\n");
+    }
 
     return rect;
 }
@@ -664,7 +725,7 @@ int drop_upper_rows(Rectangle rect, int use_mask) {
     int x1 = rect.x1;
     int y1 = rect.y1;
     int x2 = rect.x2;
-    int y2 = rect.y2; 
+    int y2 = rect.y2;
 
     for (int i = y1; i <= y2; ++i) {
         max_pr_in_the_line = 0.0;
@@ -780,10 +841,11 @@ int find_objects() {
                 cumulus = get_cumulus_centered(block_x, block_y);
 
                 rect = cumulus_to_rectangle(cumulus);
+                if (rect == NULL) continue;
                 reduce_rectangle_size(rect);
 
                 lr = rectangle_list_add(&rect);
-                compute_mask_for_rect(NULL);        // next recteangle found does not overlap with any
+                compute_mask_for_rect(NULL);        // ensure that next rectangle found does not overlap with any
 
                 if (num_rects >= MAX_NUM_RECTANGLES){
                     if (TRACE_LEVEL>=1) printf("Maximum number of rectangles reached\n");
@@ -902,6 +964,7 @@ LinkedRectangle* track_object(LinkedRectangle **lr){
     rect->x2 -= MIN(right_columns, 2*MAX_RECTANGLE_CHANGE_PER_FRAME);
     
     if (TRACE_LEVEL>=0) printf("\n---RECTANGLE---\n");
+    if (TRACE_LEVEL>=1) printf("ID = %lu\n", (*lr)->id);
     if (TRACE_LEVEL>=2) printf("INICIAL  -->\tx1=%d\t y1=%d\t x2=%d\t y2=%d\n", initial_x1, initial_y1, initial_x2, initial_y2);
     if (TRACE_LEVEL>=2) printf("ENLARGED -->\tx1=%d\t y1=%d\t x2=%d\t y2=%d\n", x1_enlarged, y1_enlarged, x2_enlarged, y2_enlarged);
     if (TRACE_LEVEL>=2) printf("FINAL    -->\t");
