@@ -1401,7 +1401,7 @@ int main( int argc, char** argv ) {
         printf("The elapsed time per frame is: %lf miliseconds approximately.\n\n", ((double)time_elapsed/1000000)/(double)frame);
     }
 
-    fclose(csv_file);
+    if (WRITE_CSV) fclose(csv_file);
     mask_free();
     close_pr_computation();
     rectangles_free();
