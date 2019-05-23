@@ -20,7 +20,7 @@
 
 ///  PREPROCESSOR MACROS  ///
 #define BUFF_SIZE_OBJECT_DETECTION 2
-#define MAX_NUM_RECTANGLES 10
+#define MAX_NUM_RECTANGLES 30
 
 #define MIN_PR_DIFF_TO_CONSIDER_CUMULUS 0.25    //0.25
 #define THRESHOLD_KEEP_RECTANGLE_EDGE 0.25      //0.3
@@ -33,24 +33,28 @@
 #define POSSIBLE_CUMULUS 1
 #define NOT_A_CUMULUS 0
 
-#define MAX_CUMULUS_SIZE 5
+#define MAX_CUMULUS_SIZE 8
 
 #define MODE_BASE_IMAGE_FIRST_FRAME 1
 #define MODE_BASE_IMAGE_INMEDIATE_PREVIOUS_FRAME 2
 
 #define MAX_MOV_VALID_FRAME_MODE_FIRST_FRAME 0.065
-#define MAX_MOV_VALID_FRAME_MODE_PREV_FRAME 0.02       //0.025 //0.035
-#define MOV_INCR_PER_FRAME 0.01
+#define MAX_MOV_VALID_FRAME_MODE_PREV_FRAME 0.01
+#define MOV_INCR_PER_FRAME 0.005
 #define VALID_FRAME 1
 #define INVALID_FRAME 0
 
 #define MAX_RECTANGLE_CHANGE_PER_FRAME 1
-#define MAX_FRAMES_NOT_SEEN_UNTIL_REMOVING_RECTANGLE 10 //5 //15 //120      // >= this --> eliminate
-#define MIN_FRAMES_SEEN_TO_MAKE_RECTANGLE_PERSISTENT 5  //3 //4 //5         // >= this --> persist
+//#define MAX_FRAMES_NOT_SEEN_UNTIL_REMOVING_RECTANGLE 10 //5 //15 //120      // >= this --> eliminate
+//#define MIN_FRAMES_SEEN_TO_MAKE_RECTANGLE_PERSISTENT 5  //3 //4 //5         // >= this --> persist
 
-#define RECT_STATUS_NOT_PERSISTENT 0
-#define RECT_STATUS_NORMAL 1
-#define RECT_STATUS_DISAPPEARING 2
+#define FR_SEEN_BUF_SIZE 30
+#define FR_SEEN_IN_BUF_TO_PERSIST 17
+#define FR_NOT_SEEN_IN_BUF_TO_REMOVE 20
+
+#define NOT_PERSISTENT 0
+#define PERSISTENT 1
+#define PERSISTENT_MISSING 2
 
 #define MIN(a,b) ((a) < (b) ? (a) : (b))
 #define MAX(a,b) ((a) > (b) ? (a) : (b))
@@ -60,16 +64,9 @@
 #define X2_CORNER_FROM_CUMULUS(x_center, cumulus_size) (x_center + (cumulus_size-(cumulus_size%2))/2)
 #define Y2_CORNER_FROM_CUMULUS(y_center, cumulus_size) (y_center + (cumulus_size-(cumulus_size%2))/2)
 
-#define RECT_STATUS(lr_pointer) \
-    (((lr_pointer)->frames_seen < MIN_FRAMES_SEEN_TO_MAKE_RECTANGLE_PERSISTENT) ?\
-        (RECT_STATUS_NOT_PERSISTENT) :\
-        (((lr_pointer)->frames_not_seen == 0) ?\
-            (RECT_STATUS_NORMAL) :\
-            (RECT_STATUS_DISAPPEARING)\
-        )\
-    )
 
 #define OUTPUT_COLOURED_FRAME 0             // 1 to output original frame with rectangles, 0 to output black&white blocks
+#define SHOW_NOT_PERSISTENT_RECTS 1         // 1 to show detected but not persistent rectangles, 0 not to
 #define MEASURE_TIME_ELAPSED 0              // 1 to measure, 0 not to measure
 #define WRITE_CSV 0                         // 1 to write the rectangles in the frame, 0 not to
 #define DO_NOT_WRITE_IMAGES_JUST_COMPUTE 0  // 1 to do only computing, 0 to actually write output image files
@@ -125,8 +122,9 @@ int mode;
 typedef struct linkedrectangle{
     Rectangle *data;
     unsigned long id;           // unique id of the rectangle
-    int frames_not_seen;        // consecutive frames in which the object has not been re-detected
-    int frames_seen;            // total number of frames in which the object has been detected
+    int rect_state;             // 0: not persistent, other: persistent
+    int write_index_buffer;     // next position to write in the frames_seen_buffer. Initially 1
+    int *frames_seen_buffer;    // buffer, 0 if not seen, 1 if seen. Initially [1, 0, 0, 0, 0 ... 0]
     int prev_x_size;            // x side size before the overlapping. If no overlapping, the size in the previous frame
     int prev_y_size;            // y side size before the overlapping. If no overlapping, the size in the previous frame
     struct linkedrectangle *next;
@@ -154,6 +152,7 @@ void add_rectangle_to_mask(LinkedRectangle **lr);
 void print_mask();
 
 void pr_changes(int image_position_buffer);
+int count_nonzero(int *array, int length);
 
 int find_objects();
 
@@ -232,6 +231,25 @@ void pr_changes(int image_position_buffer) {
             printf("ERROR: mode not defined.\n");
             return;
     }
+}
+
+/**
+ * Counts the number of non-zero ints of a given array.
+ *
+ *
+ * @param int *array
+ *      The array to count in.
+ * @param int length
+ *      The length of the array.
+ *
+ * @return count
+ *      The number of non-zeros in the array.
+ */
+int count_nonzero(int *array, int length){
+    int count = 0;
+    for (int i = 0; i < length; ++i)
+        if(array[i]!=0) count++;
+    return count;
 }
 
 /**
@@ -384,31 +402,37 @@ void rectangles_free() {
  */
 LinkedRectangle* rectangle_list_add(Rectangle **rect) {
     static unsigned long rect_id = 0;
+    LinkedRectangle *lr = NULL;
 
     if (num_rects>=MAX_NUM_RECTANGLES){                                         // list is full
-        free(*rect);
-        (*rect) = NULL;
-        return NULL;
+        goto FREES;
     }
     
-    LinkedRectangle *lr = (LinkedRectangle *)malloc(sizeof(LinkedRectangle));
+    lr = (LinkedRectangle *)malloc(sizeof(LinkedRectangle));
     if (lr==NULL) {                                                             // no memory
-        free(*rect);
-        (*rect) = NULL;
-        return NULL;
+        goto FREES;
+    }
+
+    lr->frames_seen_buffer = (int *)malloc(FR_SEEN_BUF_SIZE * sizeof(int));
+    if (lr->frames_seen_buffer==NULL) {                                         // no memory
+        goto FREES;
     }
 
     if (rect_list_head==NULL && rect_list_tail==NULL && num_rects==0)           // all null (list empty)
         rect_list_head = lr; // the new rectangle is the first element of the list
     else if (rect_list_head==NULL || rect_list_tail==NULL || num_rects==0)      // one null but the other(s) not
-        return NULL;    // nonsense, both first and last must be null or not
+        goto FREES;    // nonsense, both first and last must be null or not
     else                                                                        // all not null (typical non-empty list)
         rect_list_tail->next = lr;
 
     rect_list_tail = lr; // the new rectangle is the last element of the list
     lr->data = *rect;
-    lr->frames_not_seen = 0;
-    lr->frames_seen = 1;
+    lr->rect_state = 0;
+    lr->write_index_buffer = 1;
+    lr->frames_seen_buffer[0] = 1;
+    for (int i = 1; i < FR_SEEN_BUF_SIZE; ++i) {
+        lr->frames_seen_buffer[i] = 0;
+    }
     lr->next = NULL;
     lr->prev_x_size = 1+((*rect)->x2)-((*rect)->x1);
     lr->prev_y_size = 1+((*rect)->y2)-((*rect)->y1);
@@ -418,6 +442,19 @@ LinkedRectangle* rectangle_list_add(Rectangle **rect) {
 
     if (TRACE_LEVEL>=1) printf("Saved rectangle:\tx1=%d\ty1=%d\tx2=%d\ty2=%d\n", (lr->data)->x1, (lr->data)->y1, (lr->data)->x2, (lr->data)->y2);
     return lr;
+
+    FREES:
+    free(*rect);
+    (*rect) = NULL;
+    if (lr != NULL) {
+        if (lr->frames_seen_buffer != NULL) {
+            free(lr->frames_seen_buffer);
+            lr = NULL;
+        }
+        free(lr);
+        lr = NULL;
+    }
+    return NULL;
 }
 
 /**
@@ -464,6 +501,8 @@ int rectangle_list_remove(LinkedRectangle **lr) {
     FREES:
     free((*lr)->data);
     (*lr)->data = NULL;
+    free((*lr)->frames_seen_buffer);
+    (*lr)->frames_seen_buffer = NULL;
     free(*lr);
     *lr = NULL;
     num_rects--;
@@ -899,10 +938,11 @@ LinkedRectangle* track_object(LinkedRectangle **lr){
 
     Rectangle *rect = (*lr)->data;
     LinkedRectangle *next = (*lr)->next;
-    int frames_not_seen = (*lr)->frames_not_seen;
-    int frames_seen = (*lr)->frames_seen;
+    int rect_state = (*lr)->rect_state;
+    int write_index_buffer = (*lr)->write_index_buffer;
+    int *frames_seen_buffer = (*lr)->frames_seen_buffer;
 
-    if (RECT_STATUS(*lr) == RECT_STATUS_NOT_PERSISTENT)
+    if (rect_state==NOT_PERSISTENT)
         use_mask = 1;
     else
         use_mask = 0;
@@ -964,13 +1004,20 @@ LinkedRectangle* track_object(LinkedRectangle **lr){
     rect->x2 -= MIN(right_columns, 2*MAX_RECTANGLE_CHANGE_PER_FRAME);
     
     if (TRACE_LEVEL>=0) printf("\n---RECTANGLE---\n");
-    if (TRACE_LEVEL>=1) printf("ID = %lu\n", (*lr)->id);
+    if (TRACE_LEVEL>=0) printf("ID = %lu\n", (*lr)->id);
     if (TRACE_LEVEL>=2) printf("INICIAL  -->\tx1=%d\t y1=%d\t x2=%d\t y2=%d\n", initial_x1, initial_y1, initial_x2, initial_y2);
     if (TRACE_LEVEL>=2) printf("ENLARGED -->\tx1=%d\t y1=%d\t x2=%d\t y2=%d\n", x1_enlarged, y1_enlarged, x2_enlarged, y2_enlarged);
     if (TRACE_LEVEL>=2) printf("FINAL    -->\t");
     if (TRACE_LEVEL>=0)               printf("x1=%d\t y1=%d\t x2=%d\t y2=%d\n", rect->x1, rect->y1, rect->x2, rect->y2);
-    if (TRACE_LEVEL>=0) printf("frames_not_seen = %d\n", frames_not_seen);
-    if (TRACE_LEVEL>=0) printf("frames_seen = %d\n", frames_seen);
+    if (TRACE_LEVEL>=0){
+        printf("Seen in previous frames = ");
+        for (int i = 0; i < FR_SEEN_BUF_SIZE; ++i){
+            if (i == write_index_buffer) printf("*");
+            printf("%d ", frames_seen_buffer[i]);
+        }
+        printf("\n");
+    }
+    if (TRACE_LEVEL>=0) printf("rect_state = %d\n", rect_state);
     if (TRACE_LEVEL>=1) printf("prev_y_size = %d\n", (*lr)->prev_y_size);
     if (TRACE_LEVEL>=1) printf("prev_x_size = %d\n", (*lr)->prev_x_size);
     if (TRACE_LEVEL>=1 && overlapped) printf("Rectangle overlapped.\n");
@@ -981,22 +1028,33 @@ LinkedRectangle* track_object(LinkedRectangle **lr){
     // is removed.
     if (TRACE_LEVEL>=2) printf("upper_rows=%d, lower_rows=%d, left_columns=%d, right_columns=%d\n", upper_rows, lower_rows, left_columns, right_columns);
     if (upper_rows + lower_rows >= 1 + y2_enlarged - y1_enlarged  ||  left_columns + right_columns >= 1 + x2_enlarged - x1_enlarged \
-        ||  (use_mask==1 && (upper_rows + lower_rows > 2*2*MAX_RECTANGLE_CHANGE_PER_FRAME || left_columns + right_columns > 2*2*MAX_RECTANGLE_CHANGE_PER_FRAME))) {
+        ||  (/*use_mask==1 && */(upper_rows + lower_rows > 2*2*MAX_RECTANGLE_CHANGE_PER_FRAME || left_columns + right_columns > 2*2*MAX_RECTANGLE_CHANGE_PER_FRAME))) {
         rect->y1 = initial_y1;
         rect->y2 = initial_y2;
         rect->x1 = initial_x1;
         rect->x2 = initial_x2;
-        frames_not_seen++;
-        if (frames_not_seen >= MAX_FRAMES_NOT_SEEN_UNTIL_REMOVING_RECTANGLE \
-            || frames_seen < MIN_FRAMES_SEEN_TO_MAKE_RECTANGLE_PERSISTENT) {
-            rectangle_list_remove(lr);
-            if (TRACE_LEVEL>=1) printf("Rectangle removed.\n");
-            *lr = NULL;
-            return next;
+        frames_seen_buffer[write_index_buffer] = 0;
+        if (++write_index_buffer>=FR_SEEN_BUF_SIZE) write_index_buffer = 0;
+
+        if (rect_state==PERSISTENT) rect_state = PERSISTENT_MISSING;  // only for color drawing purposes
+
+        if (rect_state!=NOT_PERSISTENT \
+                && FR_SEEN_BUF_SIZE-count_nonzero(frames_seen_buffer, FR_SEEN_BUF_SIZE) >= FR_NOT_SEEN_IN_BUF_TO_REMOVE) {
+            goto REMOVE;
         }
-    } else {
-        frames_seen++;
-        frames_not_seen = 0;
+    } else {    // seen in current frame
+        frames_seen_buffer[write_index_buffer] = 1;
+        if (++write_index_buffer>=FR_SEEN_BUF_SIZE) write_index_buffer = 0;
+        if (rect_state==PERSISTENT_MISSING) rect_state = PERSISTENT;  // only for color drawing purposes
+
+    }
+
+    if (rect_state==NOT_PERSISTENT && write_index_buffer==0){
+        if (count_nonzero(frames_seen_buffer, FR_SEEN_BUF_SIZE) >= FR_SEEN_IN_BUF_TO_PERSIST) {
+            rect_state = PERSISTENT;
+        } else {
+            goto REMOVE;
+        }
     }
 
     if (overlapped != 0){      // If there is overlapping and the rectangle is bigger than the saved size, it is reduced
@@ -1015,9 +1073,17 @@ LinkedRectangle* track_object(LinkedRectangle **lr){
         (*lr)->prev_x_size = 1+(rect->x2)-(rect->x1);
     }
 
-    (*lr)->frames_not_seen = frames_not_seen;
-    (*lr)->frames_seen = frames_seen;
+    (*lr)->rect_state = rect_state;
+    (*lr)->write_index_buffer = write_index_buffer;
+    (*lr)->frames_seen_buffer = frames_seen_buffer;
 
+    return next;
+
+
+    REMOVE:
+    rectangle_list_remove(lr);
+    *lr = NULL;
+    if (TRACE_LEVEL>=1) printf("Rectangle removed.\n");
     return next;
 }
 
@@ -1032,8 +1098,7 @@ LinkedRectangle* track_object(LinkedRectangle **lr){
  * @param int whichEdge
  *      Indicates which of the edges should be drawn in the block (TOP_EDGE, LEFT_EDGE, RIGHT_EDGE, BOTTOM_EDGE)
  * @param int rect_status
- *      Indicates the status of the rectangle which side should be drawn. RECT_STATUS_NOT_PERSISTENT, RECT_STATUS_NORMAL,
- *      RECT_STATUS_DISAPPEARING
+ *      Indicates the status of the rectangle which side should be drawn. NOT_PERSISTENT, PERSISTENT, PERSISTENT_MISSING
  *
  * @return int
  *      If everything is fine returns 0, if there was a problem, -1.
@@ -1050,15 +1115,16 @@ int drawEdgeOfRectangle(int block_x, int block_y, int whichEdge, int rect_status
     if (yfin > height-theoretical_block_height)
         yfin = height;
 
-    if (rect_status == RECT_STATUS_NOT_PERSISTENT) {        // yellow
+    if (rect_status == NOT_PERSISTENT) {        // yellow
+        if (!SHOW_NOT_PERSISTENT_RECTS) return 0;
         y_value = 255;
         u_value = 0;
         v_value = 148;
-    } else if (rect_status == RECT_STATUS_NORMAL) {         // red
+    } else if (rect_status == PERSISTENT) {         // red
         y_value = 76;
         u_value = 84;
         v_value = 255;
-    } else if (rect_status == RECT_STATUS_DISAPPEARING) {   // pink
+    } else if (rect_status == PERSISTENT_MISSING) {   // pink
         y_value = 135;
         u_value = 195;
         v_value = 213;
@@ -1128,13 +1194,7 @@ void draw_rectangles_in_frame() {
     // for each rectangle
     if (rect_list_head==NULL && rect_list_tail==NULL && num_rects==0) return; // all null (list empty)
     else while (p!=NULL){
-        int rect_status;
-        if (p->frames_seen < MIN_FRAMES_SEEN_TO_MAKE_RECTANGLE_PERSISTENT)
-            rect_status = RECT_STATUS_NOT_PERSISTENT;   // Non-confirmed object rectangle (initial)
-        else if (p->frames_not_seen == 0)
-            rect_status = RECT_STATUS_NORMAL;           // Normal rectangle (already considered object)
-        else
-            rect_status = RECT_STATUS_DISAPPEARING;     // Disappearing rectangle (object not seen in last frame(s))
+        int rect_status = p->rect_state;
 
         rect = p->data;
         for (int block_y = rect->y1; block_y <= rect->y2; block_y++) {
@@ -1251,7 +1311,7 @@ int write_csv(int frameNumber, FILE** csv_file_p){
         int x1, y1, x2, y2;
         do {
             p_before = p;
-            if (RECT_STATUS(p_before) != RECT_STATUS_NOT_PERSISTENT) {
+            if (p->rect_state != NOT_PERSISTENT) {
                 x1 = (width/total_blocks_width) * (p->data->x1);            if (x1 > width) x1 = width;
                 y1 = (height/total_blocks_height) * (p->data->y1);          if (y1 > height) y1 = height;
                 x2 = (width/total_blocks_width) * (1+(p->data->x2)) - 1;    if (x2 > width) x2 = width;
@@ -1397,11 +1457,14 @@ int main( int argc, char** argv ) {
     }
 
     if (MEASURE_TIME_ELAPSED) {
-        printf("\n\nThe total time elapsed is: %lf miliseconds approximately.\n", ((double)time_elapsed/1000000));
+        printf("\n\nThe time elapsed for all frames is: %lf miliseconds approximately.\n", ((double)time_elapsed/1000000));
         printf("The elapsed time per frame is: %lf miliseconds approximately.\n\n", ((double)time_elapsed/1000000)/(double)frame);
     }
 
-    if (WRITE_CSV) fclose(csv_file);
+    if (WRITE_CSV){
+        fflush(csv_file);
+        fclose(csv_file);
+    }
     mask_free();
     close_pr_computation();
     rectangles_free();
