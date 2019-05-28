@@ -18,46 +18,41 @@
 #include <time.h>
 
 
+
 ///  PREPROCESSOR MACROS  ///
-#define BUFF_SIZE_OBJECT_DETECTION 2
-#define MAX_NUM_RECTANGLES 30
+#define BUFF_SIZE_OBJECT_DETECTION 2            // Number of frames that are stored in memory
+#define MAX_NUM_RECTANGLES 20                   // Maximum number of rectangles in memory at the same time
 
-#define MIN_PR_DIFF_TO_CONSIDER_CUMULUS 0.25    //0.25
-#define THRESHOLD_KEEP_RECTANGLE_EDGE 0.25      //0.3
+#define MIN_PR_DIFF_TO_CONSIDER_CUMULUS 0.25    // When looking for objects, minimum PR to accept as a possible cumulus
+#define THRESHOLD_KEEP_RECTANGLE_EDGE 0.25      // When reducing size of rectangles, minimum PR to keep intact
 
-#define TOP_EDGE 1
-#define LEFT_EDGE 2
-#define RIGHT_EDGE 3
-#define BOTTOM_EDGE 4
+#define TOP_EDGE 1                              // Identifier for the top edge
+#define LEFT_EDGE 2                             // Identifier for the left edge
+#define RIGHT_EDGE 3                            // Identifier for the right edge
+#define BOTTOM_EDGE 4                           // Identifier for the bottom edge
 
-#define POSSIBLE_CUMULUS 1
-#define NOT_A_CUMULUS 0
+#define NOT_A_CUMULUS 0                         // Identifier for blocks that do not meet the requierements to be a cumulus
+#define POSSIBLE_CUMULUS 1                      // Identifier for blocks that meet the requierements to be a cumulus
 
-#define MAX_CUMULUS_SIZE 8
+#define MAX_CUMULUS_SIZE 5                      // Maximum enlargement size for detected cumulus
 
-#define MODE_BASE_IMAGE_FIRST_FRAME 1
-#define MODE_BASE_IMAGE_INMEDIATE_PREVIOUS_FRAME 2
+#define MAX_MOV_VALID_FRAME 0.01                // Threshold of movement in a frame that is considered valid
+#define MOV_INCR_PER_FRAME 0.005                // Margin of movement increment between consecutive frames to consider valid
+#define INVALID_FRAME 0                         // Identifier for invalid frames
+#define VALID_FRAME 1                           // Identifier for valid frames
 
-#define MAX_MOV_VALID_FRAME_MODE_FIRST_FRAME 0.065
-#define MAX_MOV_VALID_FRAME_MODE_PREV_FRAME 0.01
-#define MOV_INCR_PER_FRAME 0.005
-#define VALID_FRAME 1
-#define INVALID_FRAME 0
+#define MAX_RECTANGLE_CHANGE_PER_FRAME 1        // Maximum speed of tracking mechanism (rectangles move at this speed)
 
-#define MAX_RECTANGLE_CHANGE_PER_FRAME 1
-//#define MAX_FRAMES_NOT_SEEN_UNTIL_REMOVING_RECTANGLE 10 //5 //15 //120      // >= this --> eliminate
-//#define MIN_FRAMES_SEEN_TO_MAKE_RECTANGLE_PERSISTENT 5  //3 //4 //5         // >= this --> persist
+#define FR_SEEN_BUF_SIZE 30                     // Size of the seen/not-seen rectangle buffer
+#define FR_SEEN_IN_BUF_TO_PERSIST 20            // Minimum number of "seen" frames to make the rectangle persistent
+#define FR_NOT_SEEN_IN_BUF_TO_REMOVE 20         // Number of "not seen" frames to revome a persistent rectangle
 
-#define FR_SEEN_BUF_SIZE 30
-#define FR_SEEN_IN_BUF_TO_PERSIST 17
-#define FR_NOT_SEEN_IN_BUF_TO_REMOVE 20
+#define NOT_PERSISTENT 0                        // Rectangle state for those still not persitent
+#define PERSISTENT 1                            // Rectangle state for those already persistent and seen in current frame
+#define PERSISTENT_MISSING 2                    // Rectangle state for those already persistent but not seen in current frame
 
-#define NOT_PERSISTENT 0
-#define PERSISTENT 1
-#define PERSISTENT_MISSING 2
-
-#define MIN(a,b) ((a) < (b) ? (a) : (b))
-#define MAX(a,b) ((a) > (b) ? (a) : (b))
+#define MIN(a,b) ((a) < (b) ? (a) : (b))        // "Minimum" arithmetic operation
+#define MAX(a,b) ((a) > (b) ? (a) : (b))        // "Maximum" arithmetic operation
 
 #define X1_CORNER_FROM_CUMULUS(x_center, cumulus_size) (x_center - (cumulus_size-(1+((cumulus_size-1)%2)))/2)
 #define Y1_CORNER_FROM_CUMULUS(y_center, cumulus_size) (y_center - (cumulus_size-(1+((cumulus_size-1)%2)))/2)
@@ -65,13 +60,13 @@
 #define Y2_CORNER_FROM_CUMULUS(y_center, cumulus_size) (y_center + (cumulus_size-(cumulus_size%2))/2)
 
 
-#define OUTPUT_COLOURED_FRAME 0             // 1 to output original frame with rectangles, 0 to output black&white blocks
-#define SHOW_NOT_PERSISTENT_RECTS 1         // 1 to show detected but not persistent rectangles, 0 not to
-#define MEASURE_TIME_ELAPSED 0              // 1 to measure, 0 not to measure
-#define WRITE_CSV 0                         // 1 to write the rectangles in the frame, 0 not to
-#define DO_NOT_WRITE_IMAGES_JUST_COMPUTE 0  // 1 to do only computing, 0 to actually write output image files
+#define OUTPUT_COLOURED_FRAME 1                 // 1 to output original frame with rectangles, 0 to output black&white blocks
+#define SHOW_NOT_PERSISTENT_RECTS 0             // 1 to show detected but not persistent rectangles, 0 not to
+#define MEASURE_TIME_ELAPSED 1                  // 1 to measure, 0 not to measure
+#define WRITE_CSV 1                             // 1 to write the rectangles in the frame, 0 not to
+#define DO_NOT_WRITE_IMAGES_JUST_COMPUTE 0      // 1 to do only computing, 0 to actually write output image files
 
-#define TRACE_LEVEL 0   // How much information is printed in the console. The higher, the more info is printed
+#define TRACE_LEVEL 1   // How much information is printed in the console. The higher, the more info is printed
                         // -1 shows nothing, 0 shows basic, etc. Accepted values: -1, 0, 1, 2, 3
 
 
@@ -79,7 +74,7 @@
 ///  GLOBAL VARIABLES  ///
 
 /**
- * Rectangle: represents the object locations (2 ints define left upper corner and 2 other ints, the right lower corner)
+ * Rectangle: represents an object location (2 ints define the left upper corner and 2 ints, the right lower corner)
  *  x1, y1
  *  +------------------+
  *  |                  |
@@ -112,29 +107,26 @@ typedef struct {
     int cumulus_size;
 } Cumulus;
 
-// The number of rectangles
+// The current number of rectangles
 int num_rects;
-
-// The mode used to detect objects (reference frame is always the first o the immediately previous to the current)
-int mode;
 
 // Simple linked list (with head and tail pointers) for saving the rectangles
 typedef struct linkedrectangle{
     Rectangle *data;
-    unsigned long id;           // unique id of the rectangle
-    int rect_state;             // 0: not persistent, other: persistent
-    int write_index_buffer;     // next position to write in the frames_seen_buffer. Initially 1
-    int *frames_seen_buffer;    // buffer, 0 if not seen, 1 if seen. Initially [1, 0, 0, 0, 0 ... 0]
-    int prev_x_size;            // x side size before the overlapping. If no overlapping, the size in the previous frame
-    int prev_y_size;            // y side size before the overlapping. If no overlapping, the size in the previous frame
-    struct linkedrectangle *next;
+    unsigned long id;               // Unique id of the rectangle
+    int rect_state;                 // NOT_PERSISTENT, PERSISTENT or PERSISTENT_MISSING
+    int write_index_buffer;         // Next position to write in the frames_seen_buffer. Initially 1
+    int *frames_seen_buffer;        // Buffer where 0 if not seen and 1 if seen. Initially [1, 0, 0, 0, 0 ... 0]
+    int prev_x_size;                // The rect width before the overlapping. If no overlapping, the previous width 
+    int prev_y_size;                // The rect height before the overlapping. If no overlapping, the previous height
+    struct linkedrectangle *next;   // Next node of the list
 } LinkedRectangle;
-LinkedRectangle *rect_list_head;
-LinkedRectangle *rect_list_tail;
+LinkedRectangle *rect_list_head;    // First node of the list
+LinkedRectangle *rect_list_tail;    // Last node of the list
 
 // A mask indicating if the object detector should find rectangles in some blocks or not (rectangles should be able to
-// overlap only when moving, not in finding). 0 indicates available for searching otherwise not. 0 --> no rectangle
-// 1 --> border around reactangle, 2 --> rectangle itself
+// overlap only when moving, not in finding). 0 indicates available for searching otherwise not.
+// 0 --> no rectangle, 1 --> border around reactangle, 2 --> rectangle itself
 int **mask;
 
 
@@ -151,7 +143,6 @@ void compute_mask_for_rect(LinkedRectangle **lr);
 void add_rectangle_to_mask(LinkedRectangle **lr);
 void print_mask();
 
-void pr_changes(int image_position_buffer);
 int count_nonzero(int *array, int length);
 
 int find_objects();
@@ -175,63 +166,13 @@ int drop_right_columns(Rectangle rect, int use_mask);
 int drawEdgeOfRectangle(int block_x, int block_y, int whichEdge, int rect_status);
 void draw_rectangles_in_frame();
 
-void update_reference_frame(int position);
-int is_frame_valid (int position);
+int is_frame_valid ();
 
 int write_csv(int frameNumber, FILE** csv_file_p);
 
 
 
 ///  FUNCTION IMPLEMENTATIONS  ///
-
-// If the mode that uses first frame as reference is finally deleted, this method can be substituted by pr_to_movement()
-// from the pereptual_relevance_api.h library
-/**
- * Calculates the differences of the current frame with the reference one, and saves the result in the buffer.
- *
- * @param int image_position_buffer
- *      The position of the of the current image buffer.
- */
-void pr_changes(int image_position_buffer) {
-
-    int prev_image_position_buffer;
-    switch (mode) {
-        case MODE_BASE_IMAGE_FIRST_FRAME:
-            for (int i = 0; i < total_blocks_width + 1; i++){
-                for (int j = 0; j < total_blocks_height + 1; j++){
-                    if (image_position_buffer==0) {
-                        diffs_x[j][i] = pr_x_buff[0][j][i];
-                        diffs_y[j][i] = pr_y_buff[0][j][i];
-                    } else {
-                        diffs_x[j][i] = pr_x_buff[image_position_buffer][j][i] - pr_x_buff[0][j][i];
-                        diffs_y[j][i] = pr_y_buff[image_position_buffer][j][i] - pr_y_buff[0][j][i];
-                    }
-                    if (diffs_x[j][i] < 0) diffs_x[j][i] = -diffs_x[j][i];
-                    if (diffs_y[j][i] < 0) diffs_y[j][i] = -diffs_y[j][i];
-                }
-            }
-            break;
-
-
-        case MODE_BASE_IMAGE_INMEDIATE_PREVIOUS_FRAME:
-            prev_image_position_buffer = image_position_buffer - 1;
-            if (prev_image_position_buffer < 0)
-                prev_image_position_buffer = buff_size - 1;
-
-            for (int i = 0; i < total_blocks_width + 1; i++){
-                for (int j = 0; j < total_blocks_height + 1; j++){
-                    diffs_x[j][i] = pr_x_buff[image_position_buffer][j][i] - pr_x_buff[prev_image_position_buffer][j][i];
-                    diffs_y[j][i] = pr_y_buff[image_position_buffer][j][i] - pr_y_buff[prev_image_position_buffer][j][i];
-                    if (diffs_x[j][i] < 0) diffs_x[j][i] = -diffs_x[j][i];
-                    if (diffs_y[j][i] < 0) diffs_y[j][i] = -diffs_y[j][i];
-                }
-            }
-            break;
-        default:
-            printf("ERROR: mode not defined.\n");
-            return;
-    }
-}
 
 /**
  * Counts the number of non-zero ints of a given array.
@@ -328,7 +269,6 @@ void fill_mask_zeros(){
         }
     }
 }
-
 
 /**
  * Adds the area occupied by the rectangle to the mask, so that next rectangles found are not overlapping with it.
@@ -1226,75 +1166,24 @@ void draw_rectangles_in_frame() {
 }
 
 /**
- * Updates the frame used as reference to the current frame.
- *
- * @param int position
- *      The current buff position.
- */
-void update_reference_frame(int position){
-    //pr_x_buff[0] = pr_x_buff[position];
-    //pr_y_buff[0] = pr_y_buff[position];
-    for (int block_y=0; block_y<total_blocks_height+1; block_y++) {
-        for (int block_x=0; block_x<total_blocks_width+1; block_x++) {
-            pr_x_buff[0][block_y][block_x] = pr_x_buff[position][block_y][block_x];
-            pr_y_buff[0][block_y][block_x] = pr_y_buff[position][block_y][block_x];
-        }
-    }
-}
-
-/**
  * Verifies if a frame is valid or not.
- *
- * @param int block_x
- *      The x coordinate of the block in which the rectangle edge should be drawn.    
- * @param int block_y
- *      The y coordinate of the block in which the rectangle edge should be drawn.
- * @param int whichEdge
- *      Indicates which of the edges should be drawn in the block (top, bottom, left or right).
  *
  * @return int
  *      If frame is valid returns VALID_FRAME (1), else returns INVALID_FRAME (0).
  */
-int is_frame_valid (int position){
+int is_frame_valid (){
     int is_valid = INVALID_FRAME;
-    static int in_a_row_invalid_frames = 0; //first time is 0, then saves value between calls
     static float last_movement = 0.0; //first time is 0.0, then saves value between calls
     float movement = get_image_movement(0);
-    //if (movement==0.0) return INVALID_FRAME;
 
-    switch (mode){
-        case MODE_BASE_IMAGE_INMEDIATE_PREVIOUS_FRAME:
-            if (movement < last_movement+MOV_INCR_PER_FRAME || movement <= MAX_MOV_VALID_FRAME_MODE_PREV_FRAME) {
-                is_valid = VALID_FRAME;
-                last_movement = movement;
-                if (TRACE_LEVEL>=0) printf("Movement = %f\n", movement);
-            }else{
-                if (TRACE_LEVEL>=0) printf("! ! ! --> INVALID FRAME, Movement = %f\n", movement);
-            }
-            break;
-
-        case MODE_BASE_IMAGE_FIRST_FRAME:
-            if (movement <= MAX_MOV_VALID_FRAME_MODE_FIRST_FRAME) {
-                is_valid = VALID_FRAME;
-                in_a_row_invalid_frames = 0;
-                if (TRACE_LEVEL>=0) printf("Movement = %f\n", movement);
-            } else {
-                if (TRACE_LEVEL>=0) printf("! ! ! --> INVALID FRAME \tMovement = %f\n", movement);
-                in_a_row_invalid_frames++;
-                if (in_a_row_invalid_frames >= 2) {
-                    update_reference_frame(position);
-                }
-            }
-            break;
-
-        default: 
-            printf("ERROR: incorrect mode.\n");
-            return INVALID_FRAME;
+    if (movement < last_movement+MOV_INCR_PER_FRAME || movement <= MAX_MOV_VALID_FRAME) {
+        last_movement = movement;
+        if (TRACE_LEVEL>=0) printf("Movement = %f\n", movement);
+        return VALID_FRAME;
     }
-
-    return is_valid;
+    if (TRACE_LEVEL>=0) printf("! ! ! --> INVALID FRAME, Movement = %f\n", movement);
+    return INVALID_FRAME;
 }
-
 
 /**
  * Writes the rectangles of the current frame into the csv.
@@ -1330,7 +1219,6 @@ int write_csv(int frameNumber, FILE** csv_file_p){
 
 ///  MAIN  ///
 int main( int argc, char** argv ) {
-    mode = MODE_BASE_IMAGE_INMEDIATE_PREVIOUS_FRAME; //MODE_BASE_IMAGE_INMEDIATE_PREVIOUS_FRAME   MODE_BASE_IMAGE_FIRST_FRAME
     
     FILE *csv_file;
     struct timespec time_start, time_end;
@@ -1353,16 +1241,9 @@ int main( int argc, char** argv ) {
 
     int starting_frame;
 
-    if (mode==MODE_BASE_IMAGE_FIRST_FRAME){
-        if (TRACE_LEVEL>=0) printf("\nUsing first frame as reference (auto-modified when 2 invalid frames in a row).\n");
-        starting_frame = 0;
-        buff_size = 2;
-    }
-    else if (mode == MODE_BASE_IMAGE_INMEDIATE_PREVIOUS_FRAME){
-        if (TRACE_LEVEL>=0) printf("\nUsing previous frame as reference.\n");
-        starting_frame = 1;
-        buff_size = BUFF_SIZE_OBJECT_DETECTION;
-    }
+    if (TRACE_LEVEL>=0) printf("\nUsing previous frame as reference.\n");
+    starting_frame = 1;
+    buff_size = BUFF_SIZE_OBJECT_DETECTION;
 
     if (WRITE_CSV) {
         csv_file = fopen("rectangles.csv", "w");
@@ -1414,26 +1295,22 @@ int main( int argc, char** argv ) {
         free(rgb);
         rgb = NULL;
         
-        int position; //int position = MIN(frameNumber, 1); //int position = (frameNumber-1)%BUFF_SIZE_OBJECT_DETECTION;
-        if (mode==MODE_BASE_IMAGE_FIRST_FRAME)
-            position = MIN(frameNumber, 1);
-        else if (mode==MODE_BASE_IMAGE_INMEDIATE_PREVIOUS_FRAME)
-            position = (frameNumber-1)%BUFF_SIZE_OBJECT_DETECTION;
+        int position = (frameNumber-1)%BUFF_SIZE_OBJECT_DETECTION; // Updates the reference frame and changes to other buffer
 
         if (MEASURE_TIME_ELAPSED){
             clock_gettime(CLOCK_MONOTONIC, &time_start);
         }
 
-        lhe_advanced_compute_perceptual_relevance (y, pr_x_buff[position], pr_y_buff[position]);
+        lhe_advanced_compute_perceptual_relevance (y, pr_x_buff[position], pr_y_buff[position]); // PR computation
 
-        pr_changes(position);
+        pr_to_movement(position); // PR difference computation
         
         if (!OUTPUT_COLOURED_FRAME) {
             create_frame(0);
         }
 
         if (frameNumber > starting_frame) {
-            if (is_frame_valid(position)){
+            if (is_frame_valid()){
                 track_objects();
                 find_objects();
             }
