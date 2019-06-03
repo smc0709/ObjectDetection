@@ -41,11 +41,11 @@
 #define INVALID_FRAME 0                         // Identifier for invalid frames
 #define VALID_FRAME 1                           // Identifier for valid frames
 
-#define MAX_RECTANGLE_CHANGE_PER_FRAME 1        // Maximum speed of tracking mechanism (rectangles move at this speed)
+#define RECT_CHANGE_PER_FRAME 1                 // Maximum speed of tracking mechanism (rectangles move at this speed)
 
 #define FR_SEEN_BUF_SIZE 30                     // Size of the seen/not-seen rectangle buffer
-#define FR_SEEN_IN_BUF_TO_PERSIST 20            // Minimum number of "seen" frames to make the rectangle persistent
-#define FR_NOT_SEEN_IN_BUF_TO_REMOVE 20         // Number of "not seen" frames to revome a persistent rectangle
+#define FR_SEEN_TO_PERSIST 17                   // Minimum number of "seen" frames to make the rectangle persistent
+#define FR_NOT_SEEN_TO_REMOVE 20                // Number of "not seen" frames to revome a persistent rectangle
 
 #define NOT_PERSISTENT 0                        // Rectangle state for those still not persitent
 #define PERSISTENT 1                            // Rectangle state for those already persistent and seen in current frame
@@ -175,8 +175,7 @@ int write_csv(int frameNumber, FILE** csv_file_p);
 ///  FUNCTION IMPLEMENTATIONS  ///
 
 /**
- * Counts the number of non-zero ints of a given array.
- *
+ * Counts the number of non-zero numbers of a given int array.
  *
  * @param int *array
  *      The array to count in.
@@ -227,7 +226,7 @@ void mask_free(){
 }
 
 /**
- * Computes an overall mask taking into account the mask of all the rectangles in the frame but the one for which is
+ * Computes a general mask taking into account the mask of all the rectangles in the frame except the one for which is
  *      computed. This way, the mask will show where all the other rectangles are, and therefore make possible to know
  *      where does it can move, where not, and where would be overlapping if it moves.
  *
@@ -244,8 +243,8 @@ void compute_mask_for_rect(LinkedRectangle **lr){
     }
 
     fill_mask_zeros();
-    if (rect_list_head==NULL && rect_list_tail==NULL && num_rects==0) return; // all null (list empty). Filled 0s mask
-    else if (rect_list_head==NULL || rect_list_tail==NULL || num_rects==0) return; // at least one null (list corrupt)
+    if (rect_list_head==NULL && rect_list_tail==NULL && num_rects==0) return; // All null (list empty). Filled 0s mask
+    else if (rect_list_head==NULL || rect_list_tail==NULL || num_rects==0) return;  // At least one null (list corrupt)
     else{
         LinkedRectangle *p = rect_list_head;
         LinkedRectangle *p_before=NULL;
@@ -258,9 +257,8 @@ void compute_mask_for_rect(LinkedRectangle **lr){
 }
 
 /**
- * Fills the rectangle mask with zeros everywhere, so that it cleans the memory zone.
+ * Fills the rectangle mask with zeros everywhere, so that it cleans the memory zone and prepares it to add rectangles.
  */
-
 void fill_mask_zeros(){
 
     for (int y = 0; y < total_blocks_height; ++y) {
@@ -699,7 +697,6 @@ Rectangle* cumulus_to_rectangle(Cumulus cumulus){
  *      The number of lines to remove (0 to keep it the same).
  */
 int drop_upper_rows(Rectangle rect, int use_mask) {
-    float max_pr_in_the_line;
     int deleted_rows = 0;
     int x1 = rect.x1;
     int y1 = rect.y1;
@@ -707,20 +704,16 @@ int drop_upper_rows(Rectangle rect, int use_mask) {
     int y2 = rect.y2;
 
     for (int i = y1; i <= y2; ++i) {
-        max_pr_in_the_line = 0.0;
         for (int j = x1; j <=x2; ++j) {
-            max_pr_in_the_line = MAX(max_pr_in_the_line, sum_pr_diffs(j, i, 1, use_mask));
+            if ((!use_mask || (use_mask && mask[i][j] == 0)) && get_block_movement(j, i) >= THRESHOLD_KEEP_RECTANGLE_EDGE){
+                return deleted_rows;
+            }
         }
-        if (max_pr_in_the_line < THRESHOLD_KEEP_RECTANGLE_EDGE) {
-            deleted_rows++;
-        } else {
-            return deleted_rows;
-        }
+        deleted_rows++;
     }
     return deleted_rows;
 }
 int drop_lower_rows(Rectangle rect, int use_mask) {
-    float max_pr_in_the_line;
     int deleted_rows = 0;
     int x1 = rect.x1;
     int y1 = rect.y1;
@@ -728,20 +721,16 @@ int drop_lower_rows(Rectangle rect, int use_mask) {
     int y2 = rect.y2;
 
     for (int i = y2; i >= y1; --i) {
-        max_pr_in_the_line = 0.0;
         for (int j = x1; j <= x2; ++j) {
-            max_pr_in_the_line = MAX(max_pr_in_the_line, sum_pr_diffs(j, i, 1, use_mask));
+            if ((!use_mask || (use_mask && mask[i][j] == 0)) && get_block_movement(j, i) >= THRESHOLD_KEEP_RECTANGLE_EDGE){
+                return deleted_rows;
+            }
         }
-        if (max_pr_in_the_line < THRESHOLD_KEEP_RECTANGLE_EDGE) {
-            deleted_rows++;
-        } else {
-            return deleted_rows;
-        }
+        deleted_rows++;
     }
     return deleted_rows;
 }
 int drop_left_columns(Rectangle rect, int use_mask) {
-    float max_pr_in_the_line;
     int deleted_cols = 0;
     int x1 = rect.x1;
     int y1 = rect.y1;
@@ -749,20 +738,16 @@ int drop_left_columns(Rectangle rect, int use_mask) {
     int y2 = rect.y2;
 
     for (int j = x1; j <= x2; ++j) {
-        max_pr_in_the_line = 0.0;
         for (int i = y1; i <= y2; ++i) {
-            max_pr_in_the_line = MAX(max_pr_in_the_line, sum_pr_diffs(j, i, 1, use_mask));
+            if ((!use_mask || (use_mask && mask[i][j] == 0)) && get_block_movement(j, i) >= THRESHOLD_KEEP_RECTANGLE_EDGE){
+                return deleted_cols;
+            }
         }
-        if (max_pr_in_the_line < THRESHOLD_KEEP_RECTANGLE_EDGE) {
-            deleted_cols++;
-        } else {
-            return deleted_cols;
-        }
+        deleted_cols++;
     }
     return deleted_cols;
 }
 int drop_right_columns(Rectangle rect, int use_mask) {
-    float max_pr_in_the_line;
     int deleted_cols = 0;
     int x1 = rect.x1;
     int y1 = rect.y1;
@@ -770,15 +755,12 @@ int drop_right_columns(Rectangle rect, int use_mask) {
     int y2 = rect.y2;
 
     for (int j = x2; j >= x1; --j) {
-        max_pr_in_the_line = 0.0;
         for (int i = y1; i <= y2; ++i) {
-            max_pr_in_the_line = MAX(max_pr_in_the_line, sum_pr_diffs(j, i, 1, use_mask));
+            if ((!use_mask || (use_mask && mask[i][j] == 0)) && get_block_movement(j, i) >= THRESHOLD_KEEP_RECTANGLE_EDGE){
+                return deleted_cols;
+            }
         }
-        if (max_pr_in_the_line < THRESHOLD_KEEP_RECTANGLE_EDGE) {
-            deleted_cols++;
-        } else {
-            return deleted_cols;
-        }
+        deleted_cols++;
     }
     return deleted_cols;
 }
@@ -909,39 +891,39 @@ LinkedRectangle* track_object(LinkedRectangle **lr){
     }
 
     // Enlage rectangle
-    //rect->x1 = MAX(rect->x1 - MAX_RECTANGLE_CHANGE_PER_FRAME, 0);
-    //rect->x2 = MIN(rect->x2 + MAX_RECTANGLE_CHANGE_PER_FRAME, total_blocks_width);
-    //rect->y1 = MAX(rect->y1 - MAX_RECTANGLE_CHANGE_PER_FRAME, 0);
-    //rect->y2 = MIN(rect->y2 + MAX_RECTANGLE_CHANGE_PER_FRAME, total_blocks_height);
+    //rect->x1 = MAX(rect->x1 - RECT_CHANGE_PER_FRAME, 0);
+    //rect->x2 = MIN(rect->x2 + RECT_CHANGE_PER_FRAME, total_blocks_width);
+    //rect->y1 = MAX(rect->y1 - RECT_CHANGE_PER_FRAME, 0);
+    //rect->y2 = MIN(rect->y2 + RECT_CHANGE_PER_FRAME, total_blocks_height);
 
-    x1_enlarged = MAX(rect->x1 - MAX_RECTANGLE_CHANGE_PER_FRAME, 0);
+    x1_enlarged = MAX(rect->x1 - RECT_CHANGE_PER_FRAME, 0);
     x1_enlargement = rect->x1 - x1_enlarged;
     rect->x1 = x1_enlarged;
 
-    x2_enlarged = MIN(rect->x2 + MAX_RECTANGLE_CHANGE_PER_FRAME, total_blocks_width-1);
+    x2_enlarged = MIN(rect->x2 + RECT_CHANGE_PER_FRAME, total_blocks_width-1);
     x2_enlargement = rect->x2 - x2_enlarged;
     rect->x2 = x2_enlarged;
 
-    y1_enlarged = MAX(rect->y1 - MAX_RECTANGLE_CHANGE_PER_FRAME, 0);
+    y1_enlarged = MAX(rect->y1 - RECT_CHANGE_PER_FRAME, 0);
     y1_enlargement = rect->y1 - y1_enlarged;
     rect->y1 = y1_enlarged;
 
-    y2_enlarged = MIN(rect->y2 + MAX_RECTANGLE_CHANGE_PER_FRAME, total_blocks_height-1);
+    y2_enlarged = MIN(rect->y2 + RECT_CHANGE_PER_FRAME, total_blocks_height-1);
     y2_enlargement = rect->y2 - y2_enlarged;
     rect->y2 = y2_enlarged;
 
 
     upper_rows    = drop_upper_rows(*rect, use_mask);
-    rect->y1 += MIN(upper_rows, 2*MAX_RECTANGLE_CHANGE_PER_FRAME);
+    rect->y1 += MIN(upper_rows, 2*RECT_CHANGE_PER_FRAME);
 
     lower_rows    = drop_lower_rows(*rect, use_mask);
-    rect->y2 -= MIN(lower_rows, 2*MAX_RECTANGLE_CHANGE_PER_FRAME);
+    rect->y2 -= MIN(lower_rows, 2*RECT_CHANGE_PER_FRAME);
 
     left_columns  = drop_left_columns(*rect, use_mask);
-    rect->x1 += MIN(left_columns, 2*MAX_RECTANGLE_CHANGE_PER_FRAME);
+    rect->x1 += MIN(left_columns, 2*RECT_CHANGE_PER_FRAME);
 
     right_columns = drop_right_columns(*rect, use_mask);
-    rect->x2 -= MIN(right_columns, 2*MAX_RECTANGLE_CHANGE_PER_FRAME);
+    rect->x2 -= MIN(right_columns, 2*RECT_CHANGE_PER_FRAME);
     
     if (TRACE_LEVEL>=0) printf("\n---RECTANGLE---\n");
     if (TRACE_LEVEL>=0) printf("ID = %lu\n", (*lr)->id);
@@ -964,11 +946,11 @@ LinkedRectangle* track_object(LinkedRectangle **lr){
 
     // If the rectange needs to be smaller than Nx1 or 1xN, we assume it dissappeared, and keep it the same but modifying a
     // counter until some grace frames confirm that the object dissapeared or stopped moving. Also if the rectangle is not
-    // persistent and needs to decrease (vertically or horizontally) more than twice the MAX_RECTANGLE_CHANGE_PER_FRAME, it
+    // persistent and needs to decrease (vertically or horizontally) more than twice the RECT_CHANGE_PER_FRAME, it
     // is removed.
     if (TRACE_LEVEL>=2) printf("upper_rows=%d, lower_rows=%d, left_columns=%d, right_columns=%d\n", upper_rows, lower_rows, left_columns, right_columns);
     if (upper_rows + lower_rows >= 1 + y2_enlarged - y1_enlarged  ||  left_columns + right_columns >= 1 + x2_enlarged - x1_enlarged \
-        ||  (/*use_mask==1 && */(upper_rows + lower_rows > 2*2*MAX_RECTANGLE_CHANGE_PER_FRAME || left_columns + right_columns > 2*2*MAX_RECTANGLE_CHANGE_PER_FRAME))) {
+        ||  (upper_rows + lower_rows > 2*2*RECT_CHANGE_PER_FRAME || left_columns + right_columns > 2*2*RECT_CHANGE_PER_FRAME)) {
         rect->y1 = initial_y1;
         rect->y2 = initial_y2;
         rect->x1 = initial_x1;
@@ -979,7 +961,7 @@ LinkedRectangle* track_object(LinkedRectangle **lr){
         if (rect_state==PERSISTENT) rect_state = PERSISTENT_MISSING;  // only for color drawing purposes
 
         if (rect_state!=NOT_PERSISTENT \
-                && FR_SEEN_BUF_SIZE-count_nonzero(frames_seen_buffer, FR_SEEN_BUF_SIZE) >= FR_NOT_SEEN_IN_BUF_TO_REMOVE) {
+                && FR_SEEN_BUF_SIZE-count_nonzero(frames_seen_buffer, FR_SEEN_BUF_SIZE) >= FR_NOT_SEEN_TO_REMOVE) {
             goto REMOVE;
         }
     } else {    // seen in current frame
@@ -990,7 +972,7 @@ LinkedRectangle* track_object(LinkedRectangle **lr){
     }
 
     if (rect_state==NOT_PERSISTENT && write_index_buffer==0){
-        if (count_nonzero(frames_seen_buffer, FR_SEEN_BUF_SIZE) >= FR_SEEN_IN_BUF_TO_PERSIST) {
+        if (count_nonzero(frames_seen_buffer, FR_SEEN_BUF_SIZE) >= FR_SEEN_TO_PERSIST) {
             rect_state = PERSISTENT;
         } else {
             goto REMOVE;
@@ -1187,6 +1169,11 @@ int is_frame_valid (){
 
 /**
  * Writes the rectangles of the current frame into the csv.
+ *
+ * @param int frameNumber
+ *      The number of the frame.    
+ * @param FILE **csv_file_p
+ *      The pointer to the csv file.
  *
  * @return int
  *      Returns 0 if everything was OK, other values if something went wrong. Note: -1 if list is corrupt.
