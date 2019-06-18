@@ -61,8 +61,8 @@
 #define Y2_CORNER_FROM_CUMULUS(y_center, cumulus_size) (y_center + (cumulus_size-(cumulus_size%2))/2)
 
 
-#define OUTPUT_COLOURED_FRAME 1                 // 1 to output original frame with rectangles, 0 to output black&white blocks
-#define SHOW_NOT_PERSISTENT_RECTS 0             // 1 to show detected but not persistent rectangles, 0 not to
+#define OUTPUT_COLOURED_FRAME 0                 // 1 to output original frame with rectangles, 0 to output black&white blocks
+#define SHOW_NOT_PERSISTENT_RECTS 1             // 1 to show detected but not persistent rectangles, 0 not to
 #define MEASURE_TIME_ELAPSED 1                  // 1 to measure, 0 not to measure
 #define WRITE_CSV 1                             // 1 to write the rectangles in the frame, 0 not to
 #define ONLY_COMPUTE_NO_IMG_FILES 0             // 1 to do only computing, 0 to actually write output image files
